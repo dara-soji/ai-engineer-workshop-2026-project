@@ -13,6 +13,8 @@ import {
 } from "~/services/progressService";
 import { getCountryTierInfo, COUNTRIES } from "~/lib/ppp";
 import { isTeamAdmin } from "~/services/teamService";
+import { getStreak } from "~/services/gamificationService";
+import { UserRole } from "~/db/schema";
 
 export async function loader({ request }: Route.LoaderArgs) {
   const users = getAllUsers();
@@ -46,6 +48,14 @@ export async function loader({ request }: Route.LoaderArgs) {
       })
     : [];
 
+  // The streak lives in the sidebar so it is on every page rather than
+  // somewhere the student has to go looking. It describes a student's own
+  // learning, so nobody else is shown one.
+  const streak =
+    currentUserId && currentUser?.role === UserRole.Student
+      ? getStreak(currentUserId)
+      : null;
+
   return {
     users: users.map((u) => ({ id: u.id, name: u.name, role: u.role })),
     currentUser: currentUser
@@ -57,6 +67,7 @@ export async function loader({ request }: Route.LoaderArgs) {
         }
       : null,
     recentCourses,
+    streak,
     devCountry,
     countryTierInfo,
     countries: COUNTRIES,
@@ -69,6 +80,7 @@ export default function AppLayout({ loaderData }: Route.ComponentProps) {
     users,
     currentUser,
     recentCourses,
+    streak,
     devCountry,
     countryTierInfo,
     countries,
@@ -81,6 +93,7 @@ export default function AppLayout({ loaderData }: Route.ComponentProps) {
         currentUser={currentUser}
         recentCourses={recentCourses}
         isTeamAdmin={userIsTeamAdmin}
+        streak={streak}
       />
       <main className="flex-1 overflow-y-auto">
         <Outlet />
