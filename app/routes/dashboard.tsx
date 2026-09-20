@@ -2,12 +2,12 @@ import { Link } from "react-router";
 import type { Route } from "./+types/dashboard";
 import { getUserEnrolledCourses } from "~/services/enrollmentService";
 import { calculateProgress, getCompletedLessonCount, getTotalLessonCount, getNextIncompleteLesson } from "~/services/progressService";
-import { getPointsSummary } from "~/services/gamificationService";
+import { getPointsSummary, getStreak } from "~/services/gamificationService";
 import { getCurrentUserId } from "~/lib/session";
 import { Card, CardContent, CardFooter, CardHeader } from "~/components/ui/card";
 import { Button } from "~/components/ui/button";
 import { Skeleton } from "~/components/ui/skeleton";
-import { AlertTriangle, BookOpen, CheckCircle2, GraduationCap, PlayCircle, Sparkles, Trophy } from "lucide-react";
+import { AlertTriangle, BookOpen, CheckCircle2, Flame, GraduationCap, PlayCircle, Sparkles, Trophy } from "lucide-react";
 import { CourseImage } from "~/components/course-image";
 import { data, isRouteErrorResponse } from "react-router";
 
@@ -61,8 +61,9 @@ export async function loader({ request }: Route.LoaderArgs) {
   const inProgressCourses = coursesWithProgress.filter((c) => !c.isCompleted);
 
   const { totalPoints, level } = getPointsSummary(currentUserId);
+  const streak = getStreak(currentUserId);
 
-  return { inProgressCourses, completedCourses, totalPoints, level };
+  return { inProgressCourses, completedCourses, totalPoints, level, streak };
 }
 
 function DashboardCardSkeleton() {
@@ -105,7 +106,8 @@ export function HydrateFallback() {
 }
 
 export default function Dashboard({ loaderData }: Route.ComponentProps) {
-  const { inProgressCourses, completedCourses, totalPoints, level } = loaderData;
+  const { inProgressCourses, completedCourses, totalPoints, level, streak } =
+    loaderData;
   const totalCourses = inProgressCourses.length + completedCourses.length;
 
   return (
@@ -170,6 +172,37 @@ export default function Dashboard({ loaderData }: Route.ComponentProps) {
                     : `${level.pointsToNextLevel.toLocaleString()} ${
                         level.pointsToNextLevel === 1 ? "point" : "points"
                       } to level ${level.level + 1}`}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+          <Card className="min-w-48">
+            <CardContent
+              className="flex items-center gap-3 px-6"
+              title="Complete at least one lesson each day to keep your streak. Days run on UTC."
+            >
+              <Flame
+                className={
+                  streak.currentStreak > 0
+                    ? "size-6 text-orange-500"
+                    : "size-6 text-muted-foreground"
+                }
+              />
+              <div>
+                <div className="text-2xl font-bold leading-none">
+                  {streak.currentStreak}{" "}
+                  <span className="text-base font-medium">
+                    {streak.currentStreak === 1 ? "day" : "days"}
+                  </span>
+                </div>
+                <div className="mt-1 text-sm text-muted-foreground">
+                  {streak.currentStreak > 0
+                    ? "current streak"
+                    : "Complete a lesson to start a streak"}
+                </div>
+                <div className="mt-1 text-xs text-muted-foreground">
+                  Longest: {streak.longestStreak}{" "}
+                  {streak.longestStreak === 1 ? "day" : "days"}
                 </div>
               </div>
             </CardContent>

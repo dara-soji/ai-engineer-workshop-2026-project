@@ -5,6 +5,7 @@ import { UserRole } from "~/db/schema";
 import { UserAvatar } from "~/components/user-avatar";
 import {
   BookOpen,
+  Flame,
   LayoutDashboard,
   GraduationCap,
   Shield,
@@ -34,10 +35,18 @@ interface RecentCourse {
   progress: number;
 }
 
+interface Streak {
+  currentStreak: number;
+  longestStreak: number;
+  lastActiveDate: string | null;
+}
+
 interface SidebarProps {
   currentUser: CurrentUser | null;
   recentCourses?: RecentCourse[];
   isTeamAdmin?: boolean;
+  /** Null for anyone whose learning the streak does not describe. */
+  streak?: Streak | null;
 }
 
 interface NavItem {
@@ -96,6 +105,7 @@ export function Sidebar({
   currentUser,
   recentCourses = [],
   isTeamAdmin = false,
+  streak = null,
 }: SidebarProps) {
   const currentUserRole = currentUser?.role ?? null;
   const [isDark, setIsDark] = useState(false);
@@ -120,6 +130,34 @@ export function Sidebar({
           Cadence
         </NavLink>
       </div>
+
+      {streak && (
+        <div
+          className="flex items-center gap-3 border-b border-sidebar-border px-4 py-3"
+          title="Complete at least one lesson each day to keep your streak. Days run on UTC."
+        >
+          <Flame
+            className={cn(
+              "size-4 shrink-0",
+              streak.currentStreak > 0
+                ? "text-orange-500"
+                : "text-sidebar-foreground/40"
+            )}
+          />
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-sm font-medium">
+              {streak.currentStreak > 0
+                ? `${streak.currentStreak} day streak`
+                : "No streak yet"}
+            </div>
+            <div className="truncate text-xs text-sidebar-foreground/50">
+              {streak.currentStreak > 0
+                ? `Longest: ${streak.longestStreak}`
+                : "Finish a lesson today"}
+            </div>
+          </div>
+        </div>
+      )}
 
       <nav className="flex-1 space-y-1 p-3">
         {navItems

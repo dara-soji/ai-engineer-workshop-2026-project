@@ -5,6 +5,7 @@ import {
   awardPoints,
   getPointsTotal as getLedgerPointsTotal,
 } from "./pointsLedgerService";
+import { getStreak as getStudentStreak, type StreakSummary } from "./streakService";
 
 // ─── Gamification Service ───
 // The orchestrator, and the only gamification module routes talk to. Routes
@@ -86,4 +87,16 @@ export function getPointsSummary(userId: number): PointsSummary {
   const totalPoints = getLedgerPointsTotal(userId);
 
   return { totalPoints, level: getLevelProgress(totalPoints) };
+}
+
+export type { StreakSummary };
+
+/**
+ * The student's current and longest streak, for the dashboard and the sidebar.
+ *
+ * Derived on every read from their completion dates, so it is correct without
+ * anything having run overnight to break it.
+ */
+export function getStreak(userId: number): StreakSummary {
+  return getStudentStreak(userId);
 }

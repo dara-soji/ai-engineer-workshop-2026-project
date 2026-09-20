@@ -18,6 +18,7 @@ import {
   recordLessonCompletion,
   getPointsTotal,
   getPointsSummary,
+  getStreak,
 } from "./gamificationService";
 import { markLessonComplete, resetLessonProgress } from "./progressService";
 
@@ -316,6 +317,33 @@ describe("gamificationService", () => {
       expect(summary.leveledUp).toBe(false);
       expect(summary.level.level).toBe(1);
       expect(summary.totalPoints).toBe(POINTS_PER_LESSON_COMPLETION);
+    });
+  });
+
+  describe("getStreak", () => {
+    it("is zero for a student who has completed nothing", () => {
+      const streak = getStreak(base.user.id);
+
+      expect(streak.currentStreak).toBe(0);
+      expect(streak.longestStreak).toBe(0);
+      expect(streak.lastActiveDate).toBeNull();
+    });
+
+    it("counts a lesson completed today", () => {
+      const lessons = createLessons(1);
+      markLessonComplete(base.user.id, lessons[0].id);
+
+      expect(getStreak(base.user.id).currentStreak).toBe(1);
+    });
+
+    it("counts several lessons completed today as one day", () => {
+      const lessons = createLessons(3);
+      lessons.forEach((lesson) => markLessonComplete(base.user.id, lesson.id));
+
+      const streak = getStreak(base.user.id);
+
+      expect(streak.currentStreak).toBe(1);
+      expect(streak.longestStreak).toBe(1);
     });
   });
 });
