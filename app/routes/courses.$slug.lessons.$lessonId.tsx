@@ -26,7 +26,10 @@ import {
   getBestAttempt,
 } from "~/services/quizService";
 import { computeResult } from "~/services/quizScoringService";
-import { recordLessonCompletion } from "~/services/gamificationService";
+import {
+  recordLessonCompletion,
+  type LessonCompletionSummary,
+} from "~/services/gamificationService";
 import { LessonProgressStatus } from "~/db/schema";
 import { Button } from "~/components/ui/button";
 import { Card, CardContent } from "~/components/ui/card";
@@ -43,6 +46,7 @@ import {
   MapPin,
   PlayCircle,
   ShieldAlert,
+  Sparkles,
   XCircle,
   Trophy,
   RotateCcw,
@@ -303,8 +307,10 @@ export async function action({ params, request }: Route.ActionArgs) {
 
   if (intent === "mark-complete") {
     markLessonComplete(currentUserId, lessonId);
-    recordLessonCompletion(currentUserId, lessonId);
-    return { success: true };
+    // Everything the UI needs to acknowledge the reward comes back from this
+    // one call — the points earned, the total, and whether a level was crossed.
+    const completion = recordLessonCompletion(currentUserId, lessonId);
+    return { success: true, completion };
   }
 
   if (intent === "submit-quiz") {
@@ -395,6 +401,8 @@ export default function LessonViewer({ loaderData }: Route.ComponentProps) {
     fetcher.formData?.get("intent") === "mark-complete";
 
   const justCompleted = fetcher.data?.success;
+  const completion: LessonCompletionSummary | null =
+    fetcher.data?.completion ?? null;
 
   const isCompleted =
     lessonStatus === LessonProgressStatus.Completed || justCompleted;
@@ -405,6 +413,32 @@ export default function LessonViewer({ loaderData }: Route.ComponentProps) {
       navigate(`/courses/${course.slug}/lessons/${nextLesson.id}`);
     }
   }, [justCompleted, nextLesson, course.slug, navigate]);
+
+  // Connect the reward to the action that earned it. A completion that awarded
+  // nothing — a lesson already counted — says nothing. The toasts live in the
+  // app layout, so they survive the jump to the next lesson.
+  useEffect(() => {
+    if (!completion || completion.pointsAwarded === 0) return;
+
+    toast.success(`+${completion.pointsAwarded} points`, {
+      description: `${completion.totalPoints.toLocaleString()} points in total`,
+      icon: <Sparkles className="size-4" />,
+    });
+
+    if (completion.leveledUp) {
+      toast(`Level ${completion.level.level} reached!`, {
+        description:
+          completion.level.pointsToNextLevel === null
+            ? "Highest level reached — nothing left to climb."
+            : `${completion.level.pointsToNextLevel.toLocaleString()} ${
+                completion.level.pointsToNextLevel === 1 ? "point" : "points"
+              } to level ${completion.level.level + 1}.`,
+        icon: <Trophy className="size-5 text-amber-500" />,
+        duration: 8000,
+        className: "border-amber-500/60 bg-amber-50 dark:bg-amber-950",
+      });
+    }
+  }, [completion]);
 
   const quizResult = quizFetcher.data?.quizResult ?? null;
   const isSubmittingQuiz = quizFetcher.state !== "idle";

@@ -203,4 +203,119 @@ describe("gamificationService", () => {
       expect(getPointsTotal(base.user.id)).toBe(POINTS_PER_LESSON_COMPLETION);
     });
   });
+
+  describe("recordLessonCompletion — level crossings", () => {
+    // Lessons needed to land on (or just past) the level two threshold.
+    const lessonsToLevelTwo = Math.ceil(
+      LEVEL_THRESHOLDS[1] / POINTS_PER_LESSON_COMPLETION
+    );
+
+    it("reports the level the completion leaves the student on", () => {
+      const [lesson] = createLessons(1);
+
+      const summary = recordLessonCompletion(base.user.id, lesson.id);
+
+      expect(summary.level).toEqual(
+        getLevelProgress(POINTS_PER_LESSON_COMPLETION)
+      );
+    });
+
+    it("reports no level-up for a completion that stays inside the level", () => {
+      const [lesson] = createLessons(1);
+
+      const summary = recordLessonCompletion(base.user.id, lesson.id);
+
+      expect(summary.leveledUp).toBe(false);
+      expect(summary.level.level).toBe(1);
+    });
+
+    it("reports a level-up on the completion that crosses the threshold", () => {
+      const lessons = createLessons(lessonsToLevelTwo);
+
+      const summaries = lessons.map((lesson) =>
+        recordLessonCompletion(base.user.id, lesson.id)
+      );
+
+      const crossing = summaries[lessonsToLevelTwo - 1];
+      expect(crossing.leveledUp).toBe(true);
+      expect(crossing.level.level).toBe(2);
+      expect(summaries.slice(0, -1).map((s) => s.leveledUp)).not.toContain(true);
+    });
+
+    it("reports no level-up on the completion after the crossing", () => {
+      const lessons = createLessons(lessonsToLevelTwo + 1);
+
+      lessons
+        .slice(0, lessonsToLevelTwo)
+        .forEach((lesson) => recordLessonCompletion(base.user.id, lesson.id));
+      const summary = recordLessonCompletion(
+        base.user.id,
+        lessons[lessonsToLevelTwo].id
+      );
+
+      expect(summary.leveledUp).toBe(false);
+      expect(summary.level.level).toBe(2);
+    });
+
+    it("reports no level-up when the crossing completion is repeated", () => {
+      const lessons = createLessons(lessonsToLevelTwo);
+
+      lessons.forEach((lesson) =>
+        recordLessonCompletion(base.user.id, lesson.id)
+      );
+      const summary = recordLessonCompletion(
+        base.user.id,
+        lessons[lessonsToLevelTwo - 1].id
+      );
+
+      expect(summary.pointsAwarded).toBe(0);
+      expect(summary.leveledUp).toBe(false);
+      expect(summary.level.level).toBe(2);
+    });
+
+    it("reports the student's current level when nothing was earned", () => {
+      const [lesson] = createLessons(1);
+
+      recordLessonCompletion(base.user.id, lesson.id);
+      const summary = recordLessonCompletion(base.user.id, lesson.id);
+
+      expect(summary.level).toEqual(
+        getLevelProgress(POINTS_PER_LESSON_COMPLETION)
+      );
+    });
+
+    it("reports the level and total that the dashboard would show", () => {
+      const lessons = createLessons(lessonsToLevelTwo);
+
+      const summary = lessons
+        .map((lesson) => recordLessonCompletion(base.user.id, lesson.id))
+        .at(-1)!;
+
+      const dashboard = getPointsSummary(base.user.id);
+      expect(summary.totalPoints).toBe(dashboard.totalPoints);
+      expect(summary.level).toEqual(dashboard.level);
+    });
+
+    it("keeps one student's level crossing out of another's summary", () => {
+      const lessons = createLessons(lessonsToLevelTwo);
+      const other = testDb
+        .insert(schema.users)
+        .values({
+          name: "Other Student",
+          email: "other@example.com",
+          role: schema.UserRole.Student,
+        })
+        .returning()
+        .get();
+
+      lessons
+        .slice(0, lessonsToLevelTwo - 1)
+        .forEach((lesson) => recordLessonCompletion(base.user.id, lesson.id));
+      const summary = recordLessonCompletion(other.id, lessons[0].id);
+
+      expect(summary.leveledUp).toBe(false);
+      expect(summary.level.level).toBe(1);
+      expect(summary.totalPoints).toBe(POINTS_PER_LESSON_COMPLETION);
+    });
+  });
 });
