@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { createTestDb, seedBaseData } from "~/test/setup";
 import * as schema from "~/db/schema";
 import { POINTS_PER_LESSON_COMPLETION } from "~/lib/pointsRules";
+import { LEVEL_THRESHOLDS, getLevelProgress } from "~/lib/levels";
 
 let testDb: ReturnType<typeof createTestDb>;
 let base: ReturnType<typeof seedBaseData>;
@@ -13,7 +14,11 @@ vi.mock("~/db", () => ({
 }));
 
 // Import after mock so the modules pick up our test db
-import { recordLessonCompletion, getPointsTotal } from "./gamificationService";
+import {
+  recordLessonCompletion,
+  getPointsTotal,
+  getPointsSummary,
+} from "./gamificationService";
 import { markLessonComplete, resetLessonProgress } from "./progressService";
 
 // Helper to create a module with lessons in the test db
@@ -42,6 +47,70 @@ describe("gamificationService", () => {
   describe("getPointsTotal", () => {
     it("is zero for a student who has completed nothing", () => {
       expect(getPointsTotal(base.user.id)).toBe(0);
+    });
+  });
+
+  describe("getPointsSummary", () => {
+    it("puts a student who has earned nothing on the starting level", () => {
+      const summary = getPointsSummary(base.user.id);
+
+      expect(summary.totalPoints).toBe(0);
+      expect(summary.level.level).toBe(1);
+    });
+
+    it("tells a new student how far the next level is", () => {
+      const summary = getPointsSummary(base.user.id);
+
+      expect(summary.level.pointsToNextLevel).toBe(LEVEL_THRESHOLDS[1]);
+    });
+
+    it("derives the level from the points the student has earned", () => {
+      const lessons = createLessons(1);
+      recordLessonCompletion(base.user.id, lessons[0].id);
+
+      const summary = getPointsSummary(base.user.id);
+
+      expect(summary.totalPoints).toBe(POINTS_PER_LESSON_COMPLETION);
+      expect(summary.level).toEqual(
+        getLevelProgress(POINTS_PER_LESSON_COMPLETION)
+      );
+    });
+
+    it("moves the student up a level once they cross the threshold", () => {
+      const lessonsToLevelTwo = Math.ceil(
+        LEVEL_THRESHOLDS[1] / POINTS_PER_LESSON_COMPLETION
+      );
+      const lessons = createLessons(lessonsToLevelTwo);
+
+      lessons
+        .slice(0, lessonsToLevelTwo - 1)
+        .forEach((lesson) => recordLessonCompletion(base.user.id, lesson.id));
+      expect(getPointsSummary(base.user.id).level.level).toBe(1);
+
+      recordLessonCompletion(base.user.id, lessons[lessonsToLevelTwo - 1].id);
+
+      expect(getPointsSummary(base.user.id).level.level).toBe(2);
+      expect(getPointsSummary(base.user.id).level.pointsIntoLevel).toBeLessThan(
+        POINTS_PER_LESSON_COMPLETION
+      );
+    });
+
+    it("reports each student's own level", () => {
+      const lessons = createLessons(1);
+      const other = testDb
+        .insert(schema.users)
+        .values({
+          name: "Other Student",
+          email: "other@example.com",
+          role: schema.UserRole.Student,
+        })
+        .returning()
+        .get();
+
+      recordLessonCompletion(base.user.id, lessons[0].id);
+
+      expect(getPointsSummary(other.id).totalPoints).toBe(0);
+      expect(getPointsSummary(other.id).level.pointsIntoLevel).toBe(0);
     });
   });
 

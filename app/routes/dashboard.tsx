@@ -2,12 +2,12 @@ import { Link } from "react-router";
 import type { Route } from "./+types/dashboard";
 import { getUserEnrolledCourses } from "~/services/enrollmentService";
 import { calculateProgress, getCompletedLessonCount, getTotalLessonCount, getNextIncompleteLesson } from "~/services/progressService";
-import { getPointsTotal } from "~/services/gamificationService";
+import { getPointsSummary } from "~/services/gamificationService";
 import { getCurrentUserId } from "~/lib/session";
 import { Card, CardContent, CardFooter, CardHeader } from "~/components/ui/card";
 import { Button } from "~/components/ui/button";
 import { Skeleton } from "~/components/ui/skeleton";
-import { AlertTriangle, BookOpen, CheckCircle2, GraduationCap, PlayCircle, Sparkles } from "lucide-react";
+import { AlertTriangle, BookOpen, CheckCircle2, GraduationCap, PlayCircle, Sparkles, Trophy } from "lucide-react";
 import { CourseImage } from "~/components/course-image";
 import { data, isRouteErrorResponse } from "react-router";
 
@@ -60,9 +60,9 @@ export async function loader({ request }: Route.LoaderArgs) {
   const completedCourses = coursesWithProgress.filter((c) => c.isCompleted);
   const inProgressCourses = coursesWithProgress.filter((c) => !c.isCompleted);
 
-  const totalPoints = getPointsTotal(currentUserId);
+  const { totalPoints, level } = getPointsSummary(currentUserId);
 
-  return { inProgressCourses, completedCourses, totalPoints };
+  return { inProgressCourses, completedCourses, totalPoints, level };
 }
 
 function DashboardCardSkeleton() {
@@ -105,7 +105,7 @@ export function HydrateFallback() {
 }
 
 export default function Dashboard({ loaderData }: Route.ComponentProps) {
-  const { inProgressCourses, completedCourses, totalPoints } = loaderData;
+  const { inProgressCourses, completedCourses, totalPoints, level } = loaderData;
   const totalCourses = inProgressCourses.length + completedCourses.length;
 
   return (
@@ -126,19 +126,55 @@ export default function Dashboard({ loaderData }: Route.ComponentProps) {
             Track your learning progress
           </p>
         </div>
-        <Card className="min-w-40">
-          <CardContent className="flex items-center gap-3 px-6">
-            <Sparkles className="size-6 text-primary" />
-            <div>
-              <div className="text-2xl font-bold leading-none">
-                {totalPoints.toLocaleString()}
+        <div className="flex flex-wrap items-stretch gap-4">
+          <Card className="min-w-40">
+            <CardContent className="flex items-center gap-3 px-6">
+              <Sparkles className="size-6 text-primary" />
+              <div>
+                <div className="text-2xl font-bold leading-none">
+                  {totalPoints.toLocaleString()}
+                </div>
+                <div className="mt-1 text-sm text-muted-foreground">
+                  {totalPoints === 1 ? "point" : "points"}
+                </div>
               </div>
-              <div className="mt-1 text-sm text-muted-foreground">
-                {totalPoints === 1 ? "point" : "points"}
+            </CardContent>
+          </Card>
+          <Card className="min-w-56">
+            <CardContent className="flex items-center gap-3 px-6">
+              <Trophy className="size-6 text-primary" />
+              <div className="flex-1">
+                <div className="text-2xl font-bold leading-none">
+                  Level {level.level}
+                </div>
+                <div
+                  className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted"
+                  role="progressbar"
+                  aria-valuenow={level.progressPercent}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-label={
+                    level.pointsToNextLevel === null
+                      ? "Highest level reached"
+                      : `Progress to level ${level.level + 1}`
+                  }
+                >
+                  <div
+                    className="h-full rounded-full bg-primary transition-all"
+                    style={{ width: `${level.progressPercent}%` }}
+                  />
+                </div>
+                <div className="mt-1 text-sm text-muted-foreground">
+                  {level.pointsToNextLevel === null
+                    ? "Highest level reached"
+                    : `${level.pointsToNextLevel.toLocaleString()} ${
+                        level.pointsToNextLevel === 1 ? "point" : "points"
+                      } to level ${level.level + 1}`}
+                </div>
               </div>
-            </div>
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
+        </div>
       </div>
 
       {totalCourses === 0 ? (

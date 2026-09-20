@@ -1,5 +1,6 @@
 import { PointsReason, PointsSourceType } from "~/db/schema";
 import { pointsForLessonCompletion } from "~/lib/pointsRules";
+import { getLevelProgress, type LevelProgress } from "~/lib/levels";
 import {
   awardPoints,
   getPointsTotal as getLedgerPointsTotal,
@@ -47,4 +48,22 @@ export function recordLessonCompletion(
 /** Every point the student has earned, for display. */
 export function getPointsTotal(userId: number): number {
   return getLedgerPointsTotal(userId);
+}
+
+export type PointsSummary = {
+  /** Every point the student has earned. */
+  totalPoints: number;
+  /** The level that total puts them on, and how far the next one is. */
+  level: LevelProgress;
+};
+
+/**
+ * The student's standing, for the dashboard: their total and the level derived
+ * from it. The level is computed from the same total that is displayed, so the
+ * two can never disagree.
+ */
+export function getPointsSummary(userId: number): PointsSummary {
+  const totalPoints = getLedgerPointsTotal(userId);
+
+  return { totalPoints, level: getLevelProgress(totalPoints) };
 }
