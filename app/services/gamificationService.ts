@@ -17,20 +17,32 @@ export type LessonCompletionSummary = {
   pointsAwarded: number;
   /** The student's total after this completion. */
   totalPoints: number;
+  /** The level that total puts them on, and how far the next one is. */
+  level: LevelProgress;
+  /** True only when this completion's points carried them over a threshold. */
+  leveledUp: boolean;
 };
 
 /**
- * Records that a student completed a lesson, awarding the lesson's points.
+ * Records that a student completed a lesson, awarding the lesson's points, and
+ * reports back what was just earned so the UI can acknowledge it at the moment
+ * it happened.
  *
  * Safe to call on every completion: the ledger keys the award to the lesson, so
  * re-completing a lesson the student has already been paid for awards nothing
  * further. Resetting progress does not remove the points already earned — the
  * ledger is append-only — and completing the lesson again does not pay twice.
+ *
+ * A level crossing is a computed difference, not stored state: the level before
+ * the award against the level after it. A completion that awards nothing cannot
+ * cross a threshold, so a repeat never re-celebrates.
  */
 export function recordLessonCompletion(
   userId: number,
   lessonId: number
 ): LessonCompletionSummary {
+  const levelBefore = getLevelProgress(getLedgerPointsTotal(userId)).level;
+
   const award = awardPoints({
     userId,
     amount: pointsForLessonCompletion(),
@@ -39,9 +51,17 @@ export function recordLessonCompletion(
     sourceId: lessonId,
   });
 
+  // Read the total back rather than adding the award to the earlier read: more
+  // than one award will land here as the course bonus and streak milestones
+  // arrive, and the total after all of them is what the student is on.
+  const totalPoints = getLedgerPointsTotal(userId);
+  const level = getLevelProgress(totalPoints);
+
   return {
     pointsAwarded: award.amount,
-    totalPoints: getLedgerPointsTotal(userId),
+    totalPoints,
+    level,
+    leveledUp: level.level > levelBefore,
   };
 }
 
