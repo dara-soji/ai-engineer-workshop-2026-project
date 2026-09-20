@@ -15,6 +15,7 @@ vi.mock("~/db", () => ({
 import {
   awardPoints,
   getCoursePointsTotal,
+  getPointsHistory,
   getPointsTotal,
 } from "./pointsLedgerService";
 
@@ -240,6 +241,132 @@ describe("pointsLedgerService", () => {
 
       expect(second.awarded).toBe(true);
       expect(getPointsTotal(other.id)).toBe(10);
+    });
+
+    it("records the moment the caller gives it rather than now", () => {
+      awardPoints({
+        userId: base.user.id,
+        amount: 10,
+        reason: schema.PointsReason.LessonCompleted,
+        sourceType: schema.PointsSourceType.Lesson,
+        sourceId: 1,
+        occurredAt: "2024-03-01T09:00:00.000Z",
+      });
+
+      expect(getPointsHistory(base.user.id)[0].occurredAt).toBe(
+        "2024-03-01T09:00:00.000Z"
+      );
+    });
+
+    it("records now when the caller gives no moment", () => {
+      const before = new Date().toISOString();
+
+      awardPoints({
+        userId: base.user.id,
+        amount: 10,
+        reason: schema.PointsReason.LessonCompleted,
+        sourceType: schema.PointsSourceType.Lesson,
+        sourceId: 1,
+      });
+
+      const [entry] = getPointsHistory(base.user.id);
+      expect(entry.occurredAt >= before).toBe(true);
+      expect(entry.occurredAt <= new Date().toISOString()).toBe(true);
+    });
+
+    it("keeps the moment the event was first awarded with", () => {
+      awardPoints({
+        userId: base.user.id,
+        amount: 10,
+        reason: schema.PointsReason.LessonCompleted,
+        sourceType: schema.PointsSourceType.Lesson,
+        sourceId: 1,
+        occurredAt: "2024-03-01T09:00:00.000Z",
+      });
+      awardPoints({
+        userId: base.user.id,
+        amount: 10,
+        reason: schema.PointsReason.LessonCompleted,
+        sourceType: schema.PointsSourceType.Lesson,
+        sourceId: 1,
+        occurredAt: "2025-11-01T09:00:00.000Z",
+      });
+
+      expect(getPointsHistory(base.user.id)).toHaveLength(1);
+      expect(getPointsHistory(base.user.id)[0].occurredAt).toBe(
+        "2024-03-01T09:00:00.000Z"
+      );
+    });
+  });
+
+  describe("getPointsHistory", () => {
+    it("is empty for a student who has earned nothing", () => {
+      expect(getPointsHistory(base.user.id)).toEqual([]);
+    });
+
+    it("reports what was earned and when", () => {
+      awardPoints({
+        userId: base.user.id,
+        amount: 25,
+        reason: schema.PointsReason.QuizPassed,
+        sourceType: schema.PointsSourceType.Quiz,
+        sourceId: 4,
+        occurredAt: "2024-05-02T12:00:00.000Z",
+      });
+
+      expect(getPointsHistory(base.user.id)).toEqual([
+        {
+          amount: 25,
+          reason: schema.PointsReason.QuizPassed,
+          sourceType: schema.PointsSourceType.Quiz,
+          sourceId: 4,
+          occurredAt: "2024-05-02T12:00:00.000Z",
+        },
+      ]);
+    });
+
+    it("reports the most recent event first", () => {
+      awardPoints({
+        userId: base.user.id,
+        amount: 10,
+        reason: schema.PointsReason.LessonCompleted,
+        sourceType: schema.PointsSourceType.Lesson,
+        sourceId: 1,
+        occurredAt: "2024-01-01T09:00:00.000Z",
+      });
+      awardPoints({
+        userId: base.user.id,
+        amount: 10,
+        reason: schema.PointsReason.LessonCompleted,
+        sourceType: schema.PointsSourceType.Lesson,
+        sourceId: 2,
+        occurredAt: "2024-06-01T09:00:00.000Z",
+      });
+
+      expect(getPointsHistory(base.user.id).map((e) => e.sourceId)).toEqual([
+        2, 1,
+      ]);
+    });
+
+    it("reports only the given student's events", () => {
+      const other = createSecondUser();
+
+      awardPoints({
+        userId: base.user.id,
+        amount: 10,
+        reason: schema.PointsReason.LessonCompleted,
+        sourceType: schema.PointsSourceType.Lesson,
+        sourceId: 1,
+      });
+      awardPoints({
+        userId: other.id,
+        amount: 10,
+        reason: schema.PointsReason.LessonCompleted,
+        sourceType: schema.PointsSourceType.Lesson,
+        sourceId: 2,
+      });
+
+      expect(getPointsHistory(base.user.id).map((e) => e.sourceId)).toEqual([1]);
     });
   });
 

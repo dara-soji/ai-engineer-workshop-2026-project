@@ -1,4 +1,4 @@
-import { and, eq, inArray, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, or, sql } from "drizzle-orm";
 import { db } from "~/db";
 import {
   lessons,
@@ -22,6 +22,13 @@ export type PointsAward = {
   reason: PointsReason;
   sourceType: PointsSourceType;
   sourceId: number;
+  /**
+   * When the thing that earned the points happened. Defaults to now, which is
+   * what a live award wants. The backfill passes the original completion
+   * timestamp instead, so history converted at launch reads as the day the
+   * student did the work rather than the day the backfill ran.
+   */
+  occurredAt?: string;
 };
 
 export type PointsAwardResult = {
@@ -38,6 +45,9 @@ export type PointsAwardResult = {
  * has already been earned, so awarding it again is a silent no-op that leaves
  * one row and one total. Callers never have to handle "already awarded" as an
  * exceptional case — they read `awarded` if they care, and ignore it if not.
+ *
+ * A repeat keeps everything the first award recorded, including its moment: the
+ * points were earned when they were earned, whatever a later caller believes.
  */
 export function awardPoints(award: PointsAward): PointsAwardResult {
   const inserted = db
@@ -48,6 +58,9 @@ export function awardPoints(award: PointsAward): PointsAwardResult {
       reason: award.reason,
       sourceType: award.sourceType,
       sourceId: award.sourceId,
+      // Left out entirely when the caller gave none, so the column's default —
+      // now — applies rather than a null.
+      ...(award.occurredAt ? { createdAt: award.occurredAt } : {}),
     })
     .onConflictDoNothing()
     .returning()
@@ -69,6 +82,43 @@ export function getPointsTotal(userId: number): number {
     .get();
 
   return result?.total ?? 0;
+}
+
+/** One thing the student earned, and when. */
+export type PointsHistoryEntry = {
+  /** The points it was worth when it was awarded. */
+  amount: number;
+  /** What the student did to earn it. */
+  reason: PointsReason;
+  /** The kind of thing it is attributed to. */
+  sourceType: PointsSourceType;
+  /** Which one — the lesson, quiz, course, or streak day count. */
+  sourceId: number;
+  /** When the thing that earned the points happened. */
+  occurredAt: string;
+};
+
+/**
+ * Everything the student has earned, most recent first. Empty for a student who
+ * has earned nothing.
+ *
+ * This is what makes a total explicable: every point in it names what caused it
+ * and when. Backfilled entries are dated by the original completion, so a
+ * history converted at launch reads in the order the student lived it.
+ */
+export function getPointsHistory(userId: number): PointsHistoryEntry[] {
+  return db
+    .select({
+      amount: pointsEvents.amount,
+      reason: pointsEvents.reason,
+      sourceType: pointsEvents.sourceType,
+      sourceId: pointsEvents.sourceId,
+      occurredAt: pointsEvents.createdAt,
+    })
+    .from(pointsEvents)
+    .where(eq(pointsEvents.userId, userId))
+    .orderBy(desc(pointsEvents.createdAt), desc(pointsEvents.id))
+    .all();
 }
 
 /**
