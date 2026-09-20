@@ -1,4 +1,10 @@
-import { sqliteTable, text, integer, real } from "drizzle-orm/sqlite-core";
+import {
+  sqliteTable,
+  text,
+  integer,
+  real,
+  uniqueIndex,
+} from "drizzle-orm/sqlite-core";
 
 export enum UserRole {
   Student = "student",
@@ -26,6 +32,16 @@ export enum QuestionType {
 export enum TeamMemberRole {
   Admin = "admin",
   Member = "member",
+}
+
+/** Why a student earned points. */
+export enum PointsReason {
+  LessonCompleted = "lesson_completed",
+}
+
+/** The kind of thing a points award is attributed to. */
+export enum PointsSourceType {
+  Lesson = "lesson",
 }
 
 // ─── Tables ───
@@ -238,6 +254,39 @@ export const coupons = sqliteTable("coupons", {
     .notNull()
     .$defaultFn(() => new Date().toISOString()),
 });
+
+/**
+ * Append-only ledger of every point a student has ever earned. Rows are never
+ * updated or deleted — a student's total is the sum of their events.
+ *
+ * The unique index across user, reason, source type and source id is what makes
+ * awarding idempotent: re-completing a lesson, a retried request, and a re-run
+ * of the backfill all collide with the row that already exists.
+ */
+export const pointsEvents = sqliteTable(
+  "points_events",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    userId: integer("user_id")
+      .notNull()
+      .references(() => users.id),
+    amount: integer("amount").notNull(),
+    reason: text("reason").notNull().$type<PointsReason>(),
+    sourceType: text("source_type").notNull().$type<PointsSourceType>(),
+    sourceId: integer("source_id").notNull(),
+    createdAt: text("created_at")
+      .notNull()
+      .$defaultFn(() => new Date().toISOString()),
+  },
+  (table) => [
+    uniqueIndex("points_events_user_reason_source_unique").on(
+      table.userId,
+      table.reason,
+      table.sourceType,
+      table.sourceId
+    ),
+  ]
+);
 
 export const videoWatchEvents = sqliteTable("video_watch_events", {
   id: integer("id").primaryKey({ autoIncrement: true }),
