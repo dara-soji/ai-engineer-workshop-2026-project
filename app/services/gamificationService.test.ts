@@ -1,7 +1,10 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { createTestDb, seedBaseData } from "~/test/setup";
 import * as schema from "~/db/schema";
-import { POINTS_PER_LESSON_COMPLETION } from "~/lib/pointsRules";
+import {
+  POINTS_PER_LESSON_COMPLETION,
+  STREAK_MILESTONES,
+} from "~/lib/pointsRules";
 import { LEVEL_THRESHOLDS, getLevelProgress } from "~/lib/levels";
 
 let testDb: ReturnType<typeof createTestDb>;
@@ -344,6 +347,230 @@ describe("gamificationService", () => {
 
       expect(streak.currentStreak).toBe(1);
       expect(streak.longestStreak).toBe(1);
+    });
+  });
+
+  describe("recordLessonCompletion — streak milestones", () => {
+    // The day a streak first earns a bonus, and what it pays.
+    const FIRST = STREAK_MILESTONES[0];
+    const SECOND = STREAK_MILESTONES[1];
+
+    // A fixed calendar so "one day later" means something. Only Date is faked,
+    // so the SQLite driver still runs on real timers.
+    const DAY_ZERO = Date.UTC(2026, 2, 15);
+
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date(DAY_ZERO));
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    /**
+     * Completes a lesson on the given day, the way the lesson route does it:
+     * progress first, then the gamification call.
+     */
+    function completeOnDay(dayOffset: number, lessonId: number) {
+      vi.setSystemTime(new Date(DAY_ZERO + dayOffset * 86_400_000));
+      markLessonComplete(base.user.id, lessonId);
+      return recordLessonCompletion(base.user.id, lessonId);
+    }
+
+    /** One lesson completed on each of the given days, in order. */
+    function completeOnDays(...dayOffsets: number[]) {
+      const lessons = createLessons(dayOffsets.length);
+
+      return dayOffsets.map((day, i) => completeOnDay(day, lessons[i].id));
+    }
+
+    it("awards the bonus on the day the streak reaches a milestone", () => {
+      const summaries = completeOnDays(
+        ...Array.from({ length: FIRST.days }, (_, i) => i)
+      );
+
+      expect(summaries.at(-1)!.streakMilestone).toEqual(FIRST);
+    });
+
+    it("counts the bonus in the points that completion earned", () => {
+      const summaries = completeOnDays(
+        ...Array.from({ length: FIRST.days }, (_, i) => i)
+      );
+
+      expect(summaries.at(-1)!.pointsAwarded).toBe(
+        POINTS_PER_LESSON_COMPLETION + FIRST.points
+      );
+    });
+
+    it("adds the bonus to the student's total", () => {
+      completeOnDays(...Array.from({ length: FIRST.days }, (_, i) => i));
+
+      expect(getPointsTotal(base.user.id)).toBe(
+        POINTS_PER_LESSON_COMPLETION * FIRST.days + FIRST.points
+      );
+    });
+
+    it("awards nothing extra on the days before the milestone", () => {
+      const summaries = completeOnDays(
+        ...Array.from({ length: FIRST.days - 1 }, (_, i) => i)
+      );
+
+      expect(summaries.map((s) => s.streakMilestone)).toEqual(
+        summaries.map(() => null)
+      );
+      expect(getPointsTotal(base.user.id)).toBe(
+        POINTS_PER_LESSON_COMPLETION * (FIRST.days - 1)
+      );
+    });
+
+    it("does not award the same milestone again the next day", () => {
+      const summaries = completeOnDays(
+        ...Array.from({ length: FIRST.days + 1 }, (_, i) => i)
+      );
+
+      expect(summaries.at(-1)!.streakMilestone).toBeNull();
+      expect(summaries.at(-1)!.pointsAwarded).toBe(
+        POINTS_PER_LESSON_COMPLETION
+      );
+    });
+
+    it("does not award it again on any later day of the same run", () => {
+      const summaries = completeOnDays(
+        ...Array.from({ length: SECOND.days - 1 }, (_, i) => i)
+      );
+
+      const paid = summaries.filter((s) => s.streakMilestone !== null);
+      expect(paid).toHaveLength(1);
+      expect(getPointsTotal(base.user.id)).toBe(
+        POINTS_PER_LESSON_COMPLETION * (SECOND.days - 1) + FIRST.points
+      );
+    });
+
+    it("does not award it again after the streak breaks and is rebuilt", () => {
+      const rebuilt = completeOnDays(
+        // A run to the first milestone, a missed day, then the same run again.
+        ...Array.from({ length: FIRST.days }, (_, i) => i),
+        ...Array.from({ length: FIRST.days }, (_, i) => FIRST.days + 1 + i)
+      ).at(-1)!;
+
+      expect(getStreak(base.user.id).currentStreak).toBe(FIRST.days);
+      expect(rebuilt.streakMilestone).toBeNull();
+      expect(rebuilt.pointsAwarded).toBe(POINTS_PER_LESSON_COMPLETION);
+    });
+
+    it("awards each milestone as the run reaches it", () => {
+      const summaries = completeOnDays(
+        ...Array.from({ length: SECOND.days }, (_, i) => i)
+      );
+
+      expect(summaries[FIRST.days - 1].streakMilestone).toEqual(FIRST);
+      expect(summaries[SECOND.days - 1].streakMilestone).toEqual(SECOND);
+      expect(getPointsTotal(base.user.id)).toBe(
+        POINTS_PER_LESSON_COMPLETION * SECOND.days +
+          FIRST.points +
+          SECOND.points
+      );
+    });
+
+    it("pays the bonus even when the day's lesson was already counted", () => {
+      const [first, spare, second] = createLessons(3);
+
+      completeOnDay(0, first.id);
+      // A second lesson on day zero, so the day survives `first` being
+      // re-completed later and having its completion date moved forward.
+      completeOnDay(0, spare.id);
+      completeOnDay(1, second.id);
+      // The milestone day is spent re-reading a lesson already paid for: the
+      // student still showed up, so the run still counts.
+      const summary = completeOnDay(2, first.id);
+
+      expect(getStreak(base.user.id).currentStreak).toBe(FIRST.days);
+      expect(summary.streakMilestone).toEqual(FIRST);
+      expect(summary.pointsAwarded).toBe(FIRST.points);
+    });
+
+    it("does not award a milestone for a run that predates the feature", () => {
+      // Five consecutive days of history ending yesterday, none of which the
+      // ledger ever saw — the state an existing student is in at launch.
+      const historic = createLessons(5);
+      historic.forEach((lesson, i) => {
+        testDb
+          .insert(schema.lessonProgress)
+          .values({
+            userId: base.user.id,
+            lessonId: lesson.id,
+            status: schema.LessonProgressStatus.Completed,
+            completedAt: new Date(DAY_ZERO - (i + 1) * 86_400_000).toISOString(),
+          })
+          .run();
+      });
+
+      const [today] = completeOnDays(0);
+
+      expect(getStreak(base.user.id).currentStreak).toBe(6);
+      expect(today.streakMilestone).toBeNull();
+      expect(getPointsTotal(base.user.id)).toBe(POINTS_PER_LESSON_COMPLETION);
+    });
+
+    it("pays a milestone the student reaches today, not one already passed", () => {
+      // The other side of the same rule: the run is live and ends today, so
+      // arriving at the milestone today is paid — only runs already past the
+      // milestone go unrewarded.
+      const historic = createLessons(FIRST.days - 1);
+      historic.forEach((lesson, i) => {
+        testDb
+          .insert(schema.lessonProgress)
+          .values({
+            userId: base.user.id,
+            lessonId: lesson.id,
+            status: schema.LessonProgressStatus.Completed,
+            completedAt: new Date(DAY_ZERO - (i + 1) * 86_400_000).toISOString(),
+          })
+          .run();
+      });
+
+      const [today] = completeOnDays(0);
+
+      expect(today.streakMilestone).toEqual(FIRST);
+    });
+
+    it("keeps one student's milestone out of another's", () => {
+      const other = testDb
+        .insert(schema.users)
+        .values({
+          name: "Other Student",
+          email: "other@example.com",
+          role: schema.UserRole.Student,
+        })
+        .returning()
+        .get();
+      const lessons = createLessons(FIRST.days);
+
+      lessons.forEach((lesson, i) => completeOnDay(i, lesson.id));
+      markLessonComplete(other.id, lessons[0].id);
+      const summary = recordLessonCompletion(other.id, lessons[0].id);
+
+      expect(summary.streakMilestone).toBeNull();
+      expect(getPointsTotal(other.id)).toBe(POINTS_PER_LESSON_COMPLETION);
+    });
+
+    it("counts the bonus towards the level it reports", () => {
+      const summary = completeOnDays(
+        ...Array.from({ length: FIRST.days }, (_, i) => i)
+      ).at(-1)!;
+
+      const dashboard = getPointsSummary(base.user.id);
+      expect(summary.totalPoints).toBe(dashboard.totalPoints);
+      expect(summary.level).toEqual(dashboard.level);
+    });
+
+    it("reports no milestone for a completion that keeps no streak", () => {
+      const [lesson] = createLessons(1);
+
+      const summary = recordLessonCompletion(base.user.id, lesson.id);
+
+      expect(summary.streakMilestone).toBeNull();
     });
   });
 });
