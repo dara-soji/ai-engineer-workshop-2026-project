@@ -37,12 +37,14 @@ export enum TeamMemberRole {
 /** Why a student earned points. */
 export enum PointsReason {
   LessonCompleted = "lesson_completed",
+  QuizPassed = "quiz_passed",
   StreakMilestoneReached = "streak_milestone_reached",
 }
 
 /** The kind of thing a points award is attributed to. */
 export enum PointsSourceType {
   Lesson = "lesson",
+  Quiz = "quiz",
   /** A streak milestone, identified by the day count it is a milestone for. */
   Streak = "streak",
 }

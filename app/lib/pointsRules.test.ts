@@ -1,8 +1,10 @@
 import { describe, it, expect } from "vitest";
 import {
   POINTS_PER_LESSON_COMPLETION,
+  POINTS_PER_QUIZ_PASS,
   STREAK_MILESTONES,
   pointsForLessonCompletion,
+  pointsForQuizPass,
   streakMilestoneFor,
 } from "./pointsRules";
 
@@ -26,6 +28,32 @@ describe("pointsRules", () => {
 
     it("pins the current tuning value", () => {
       expect(POINTS_PER_LESSON_COMPLETION).toBe(10);
+    });
+  });
+
+  describe("pointsForQuizPass", () => {
+    it("returns the configured point value for passing a quiz", () => {
+      expect(pointsForQuizPass()).toBe(POINTS_PER_QUIZ_PASS);
+    });
+
+    it("awards a positive number of points", () => {
+      expect(pointsForQuizPass()).toBeGreaterThan(0);
+    });
+
+    it("awards a whole number of points", () => {
+      expect(Number.isInteger(pointsForQuizPass())).toBe(true);
+    });
+
+    it("is stable across calls", () => {
+      expect(pointsForQuizPass()).toBe(pointsForQuizPass());
+    });
+
+    it("is worth more than reading the lesson it belongs to", () => {
+      expect(pointsForQuizPass()).toBeGreaterThan(pointsForLessonCompletion());
+    });
+
+    it("pins the current tuning value", () => {
+      expect(POINTS_PER_QUIZ_PASS).toBe(25);
     });
   });
 

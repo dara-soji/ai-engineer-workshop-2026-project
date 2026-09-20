@@ -3,6 +3,7 @@ import { createTestDb, seedBaseData } from "~/test/setup";
 import * as schema from "~/db/schema";
 import {
   POINTS_PER_LESSON_COMPLETION,
+  POINTS_PER_QUIZ_PASS,
   STREAK_MILESTONES,
 } from "~/lib/pointsRules";
 import { LEVEL_THRESHOLDS, getLevelProgress } from "~/lib/levels";
@@ -19,11 +20,13 @@ vi.mock("~/db", () => ({
 // Import after mock so the modules pick up our test db
 import {
   recordLessonCompletion,
+  recordQuizAttempt,
   getPointsTotal,
   getPointsSummary,
   getStreak,
 } from "./gamificationService";
 import { markLessonComplete, resetLessonProgress } from "./progressService";
+import { computeResult } from "./quizScoringService";
 
 // Helper to create a module with lessons in the test db
 function createLessons(count: number) {
@@ -571,6 +574,278 @@ describe("gamificationService", () => {
       const summary = recordLessonCompletion(base.user.id, lesson.id);
 
       expect(summary.streakMilestone).toBeNull();
+    });
+  });
+
+  describe("recordQuizAttempt", () => {
+    // These tests score their attempts with the real quiz scoring service
+    // rather than hand-writing a pass verdict, so the award is exercised
+    // against the same rule the route applies — including the passing score
+    // the instructor configured and the boundary exactly at it.
+
+    /** A quiz of `count` questions, on its own lesson, in its own module. */
+    function createQuiz(passingScore: number, count: number, position = 1) {
+      const mod = testDb
+        .insert(schema.modules)
+        .values({
+          courseId: base.course.id,
+          title: `Module ${position}`,
+          position,
+        })
+        .returning()
+        .get();
+
+      const lesson = testDb
+        .insert(schema.lessons)
+        .values({ moduleId: mod.id, title: `Lesson ${position}`, position: 1 })
+        .returning()
+        .get();
+
+      const quiz = testDb
+        .insert(schema.quizzes)
+        .values({
+          lessonId: lesson.id,
+          title: `Quiz ${position}`,
+          passingScore,
+        })
+        .returning()
+        .get();
+
+      const questions = Array.from({ length: count }, (_, i) => {
+        const question = testDb
+          .insert(schema.quizQuestions)
+          .values({
+            quizId: quiz.id,
+            questionText: `Question ${i + 1}`,
+            questionType: schema.QuestionType.MultipleChoice,
+            position: i + 1,
+          })
+          .returning()
+          .get();
+
+        const correct = testDb
+          .insert(schema.quizOptions)
+          .values({
+            questionId: question.id,
+            optionText: "Correct",
+            isCorrect: true,
+          })
+          .returning()
+          .get();
+
+        const wrong = testDb
+          .insert(schema.quizOptions)
+          .values({
+            questionId: question.id,
+            optionText: "Wrong",
+            isCorrect: false,
+          })
+          .returning()
+          .get();
+
+        return { question, correct, wrong };
+      });
+
+      return { quiz, questions };
+    }
+
+    /**
+     * Sits a quiz answering `correctCount` questions correctly, exactly as the
+     * route does: score the attempt, then hand the verdict to the orchestrator.
+     */
+    function sitQuiz(
+      userId: number,
+      { quiz, questions }: ReturnType<typeof createQuiz>,
+      correctCount: number
+    ) {
+      const selectedAnswers = Object.fromEntries(
+        questions.map((q, i) => [
+          q.question.id,
+          i < correctCount ? q.correct.id : q.wrong.id,
+        ])
+      );
+
+      const result = computeResult(userId, quiz.id, selectedAnswers);
+
+      return recordQuizAttempt(userId, quiz.id, result.passed);
+    }
+
+    it("awards the quiz's points the first time it is passed", () => {
+      const quiz = createQuiz(0.7, 4);
+
+      const summary = sitQuiz(base.user.id, quiz, 4);
+
+      expect(summary.pointsAwarded).toBe(POINTS_PER_QUIZ_PASS);
+      expect(summary.totalPoints).toBe(POINTS_PER_QUIZ_PASS);
+    });
+
+    it("raises the student's total points", () => {
+      const quiz = createQuiz(0.7, 4);
+
+      sitQuiz(base.user.id, quiz, 4);
+
+      expect(getPointsTotal(base.user.id)).toBe(POINTS_PER_QUIZ_PASS);
+    });
+
+    it("awards nothing for a failed attempt", () => {
+      const quiz = createQuiz(0.7, 4);
+
+      const summary = sitQuiz(base.user.id, quiz, 1);
+
+      expect(summary.pointsAwarded).toBe(0);
+      expect(getPointsTotal(base.user.id)).toBe(0);
+    });
+
+    it("awards nothing further when an already-passed quiz is passed again", () => {
+      const quiz = createQuiz(0.7, 4);
+
+      sitQuiz(base.user.id, quiz, 3);
+      const retake = sitQuiz(base.user.id, quiz, 4);
+
+      expect(retake.pointsAwarded).toBe(0);
+      expect(retake.totalPoints).toBe(POINTS_PER_QUIZ_PASS);
+    });
+
+    it("pays once however many attempts the pass took", () => {
+      const quiz = createQuiz(0.7, 4);
+
+      sitQuiz(base.user.id, quiz, 0);
+      sitQuiz(base.user.id, quiz, 2);
+      const passing = sitQuiz(base.user.id, quiz, 4);
+
+      expect(passing.pointsAwarded).toBe(POINTS_PER_QUIZ_PASS);
+      expect(getPointsTotal(base.user.id)).toBe(POINTS_PER_QUIZ_PASS);
+    });
+
+    it("does not take points back when a later attempt fails", () => {
+      const quiz = createQuiz(0.7, 4);
+
+      sitQuiz(base.user.id, quiz, 4);
+      const flunked = sitQuiz(base.user.id, quiz, 1);
+
+      expect(flunked.pointsAwarded).toBe(0);
+      expect(getPointsTotal(base.user.id)).toBe(POINTS_PER_QUIZ_PASS);
+    });
+
+    it("accumulates across different quizzes", () => {
+      const first = createQuiz(0.7, 4, 1);
+      const second = createQuiz(0.7, 4, 2);
+
+      sitQuiz(base.user.id, first, 4);
+      const summary = sitQuiz(base.user.id, second, 4);
+
+      expect(summary.pointsAwarded).toBe(POINTS_PER_QUIZ_PASS);
+      expect(summary.totalPoints).toBe(POINTS_PER_QUIZ_PASS * 2);
+    });
+
+    it("awards a score exactly at the configured passing mark", () => {
+      const quiz = createQuiz(0.5, 4);
+
+      const summary = sitQuiz(base.user.id, quiz, 2);
+
+      expect(summary.pointsAwarded).toBe(POINTS_PER_QUIZ_PASS);
+    });
+
+    it("awards nothing for a score just under the configured passing mark", () => {
+      const quiz = createQuiz(0.5, 4);
+
+      const summary = sitQuiz(base.user.id, quiz, 1);
+
+      expect(summary.pointsAwarded).toBe(0);
+    });
+
+    it("respects each quiz's own passing score", () => {
+      const lenient = createQuiz(0.5, 4, 1);
+      const strict = createQuiz(1, 4, 2);
+
+      expect(sitQuiz(base.user.id, lenient, 3).pointsAwarded).toBe(
+        POINTS_PER_QUIZ_PASS
+      );
+      expect(sitQuiz(base.user.id, strict, 3).pointsAwarded).toBe(0);
+    });
+
+    it("keeps each student's quiz points to themselves", () => {
+      const quiz = createQuiz(0.7, 4);
+      const other = testDb
+        .insert(schema.users)
+        .values({
+          name: "Other Student",
+          email: "other@example.com",
+          role: schema.UserRole.Student,
+        })
+        .returning()
+        .get();
+
+      sitQuiz(base.user.id, quiz, 4);
+
+      expect(getPointsTotal(other.id)).toBe(0);
+    });
+
+    it("lets a second student earn a quiz the first has already passed", () => {
+      const quiz = createQuiz(0.7, 4);
+      const other = testDb
+        .insert(schema.users)
+        .values({
+          name: "Other Student",
+          email: "other@example.com",
+          role: schema.UserRole.Student,
+        })
+        .returning()
+        .get();
+
+      sitQuiz(base.user.id, quiz, 4);
+      const summary = sitQuiz(other.id, quiz, 4);
+
+      expect(summary.pointsAwarded).toBe(POINTS_PER_QUIZ_PASS);
+    });
+
+    it("counts towards the total the dashboard shows", () => {
+      const quiz = createQuiz(0.7, 4);
+      const [lesson] = createLessons(1);
+
+      recordLessonCompletion(base.user.id, lesson.id);
+      const summary = sitQuiz(base.user.id, quiz, 4);
+
+      const dashboard = getPointsSummary(base.user.id);
+      expect(summary.totalPoints).toBe(dashboard.totalPoints);
+      expect(summary.level).toEqual(dashboard.level);
+    });
+
+    it("reports no level-up for a pass that stays inside the level", () => {
+      const quiz = createQuiz(0.7, 4);
+
+      const summary = sitQuiz(base.user.id, quiz, 4);
+
+      expect(summary.leveledUp).toBe(false);
+      expect(summary.level.level).toBe(1);
+    });
+
+    it("reports a level-up on the pass that crosses the threshold", () => {
+      const quiz = createQuiz(0.7, 4);
+      const lessonsJustBelow = Math.ceil(
+        (LEVEL_THRESHOLDS[1] - POINTS_PER_QUIZ_PASS) /
+          POINTS_PER_LESSON_COMPLETION
+      );
+      const lessons = createLessons(lessonsJustBelow);
+
+      lessons.forEach((lesson) =>
+        recordLessonCompletion(base.user.id, lesson.id)
+      );
+      expect(getPointsSummary(base.user.id).level.level).toBe(1);
+
+      const summary = sitQuiz(base.user.id, quiz, 4);
+
+      expect(summary.leveledUp).toBe(true);
+      expect(summary.level.level).toBe(2);
+    });
+
+    it("cannot level a student up on a pass that awarded nothing", () => {
+      const quiz = createQuiz(0.7, 4);
+
+      sitQuiz(base.user.id, quiz, 4);
+      const retake = sitQuiz(base.user.id, quiz, 4);
+
+      expect(retake.leveledUp).toBe(false);
     });
   });
 });
