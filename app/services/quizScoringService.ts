@@ -24,8 +24,13 @@ const LOWEST_GRADE = "F";
  * Whether a score passes the quiz. The passing score configured on the quiz
  * governs, and the comparison is inclusive — a score exactly at the passing
  * mark is a pass.
+ *
+ * Exported because the backfill re-judges historic attempts against this rule
+ * rather than trusting the verdict stored on them: attempts recorded before the
+ * comparison was corrected disagree with it, and there must be exactly one
+ * definition of what passes.
  */
-function isPassingScore(score: number, passingScore: number): boolean {
+export function isPassingScore(score: number, passingScore: number): boolean {
   return score >= passingScore;
 }
 
