@@ -1,5 +1,6 @@
 import { PointsReason, PointsSourceType } from "~/db/schema";
 import {
+  pointsForCourseCompletion,
   pointsForLessonCompletion,
   pointsForQuizPass,
   streakMilestoneFor,
@@ -10,6 +11,11 @@ import {
   awardPoints,
   getPointsTotal as getLedgerPointsTotal,
 } from "./pointsLedgerService";
+import {
+  getCompletedLessonCount,
+  getCourseIdForLesson,
+  getTotalLessonCount,
+} from "./progressService";
 import { getStreak as getStudentStreak, type StreakSummary } from "./streakService";
 
 // ─── Gamification Service ───
@@ -18,10 +24,18 @@ import { getStreak as getStudentStreak, type StreakSummary } from "./streakServi
 // back from the call that recorded the achievement.
 // Uses positional parameters (project convention).
 
+/** The course a completion finished, and what finishing it paid. */
+export type CourseCompletion = {
+  /** The course the student just finished. */
+  courseId: number;
+  /** The bonus points finishing it earned. */
+  points: number;
+};
+
 export type LessonCompletionSummary = {
   /**
-   * Everything this completion earned: the lesson, plus any streak milestone
-   * bonus it triggered. Zero when none of it was new.
+   * Everything this completion earned: the lesson, plus any course completion
+   * or streak milestone bonus it triggered. Zero when none of it was new.
    */
   pointsAwarded: number;
   /** The student's total after this completion. */
@@ -30,6 +44,11 @@ export type LessonCompletionSummary = {
   level: LevelProgress;
   /** True only when this completion's points carried them over a threshold. */
   leveledUp: boolean;
+  /**
+   * The course this completion finished and was paid for, or null — null both
+   * when the course is not finished and when the bonus had already been paid.
+   */
+  courseCompletion: CourseCompletion | null;
   /**
    * The streak milestone this completion reached and was paid for, or null —
    * null both when no milestone was reached and when it had already been paid.
@@ -51,8 +70,9 @@ export type LessonCompletionSummary = {
  * the award against the level after it. A completion that awards nothing cannot
  * cross a threshold, so a repeat never re-celebrates.
  *
- * Must be called after the lesson's progress has been recorded: the streak is
- * derived from completion dates, so today only counts once the row exists.
+ * Must be called after the lesson's progress has been recorded: both the streak
+ * and whether the course is now finished are derived from the progress rows, so
+ * neither today nor this lesson counts until the row exists.
  */
 export function recordLessonCompletion(
   userId: number,
@@ -68,20 +88,61 @@ export function recordLessonCompletion(
     sourceId: lessonId,
   });
 
+  const courseCompletion = awardCourseCompletion(userId, lessonId);
   const streakMilestone = awardStreakMilestone(userId);
 
-  // Read the total back rather than adding the awards to the earlier read: two
-  // awards may have landed already, and the course bonus will make it three.
+  // Read the total back rather than adding the awards to the earlier read:
+  // three separate awards may have landed by now.
   const totalPoints = getLedgerPointsTotal(userId);
   const level = getLevelProgress(totalPoints);
 
   return {
-    pointsAwarded: lessonAward.amount + (streakMilestone?.points ?? 0),
+    pointsAwarded:
+      lessonAward.amount +
+      (courseCompletion?.points ?? 0) +
+      (streakMilestone?.points ?? 0),
     totalPoints,
     level,
     leveledUp: level.level > levelBefore,
+    courseCompletion,
     streakMilestone,
   };
+}
+
+/**
+ * Pays the bonus if this completion was the one that finished the lesson's
+ * course, and reports which course — or null if there was nothing to pay.
+ *
+ * "Finished" means every lesson in the course is complete, which is why this
+ * must run after the completion's progress row exists: the lesson that just
+ * landed is one of the ones being counted. A course with no lessons is never
+ * finished — there is nothing to have done.
+ *
+ * The course is the source id, so the ledger's key is what keeps the bonus to
+ * once per course: revisiting any lesson of a course already finished, or
+ * resetting one and completing it again, cannot pay a second time.
+ */
+function awardCourseCompletion(
+  userId: number,
+  lessonId: number
+): CourseCompletion | null {
+  const courseId = getCourseIdForLesson(lessonId);
+  if (courseId === null) return null;
+
+  const totalLessons = getTotalLessonCount(courseId);
+  if (totalLessons === 0) return null;
+  if (getCompletedLessonCount(userId, courseId) < totalLessons) return null;
+
+  const award = awardPoints({
+    userId,
+    amount: pointsForCourseCompletion(),
+    reason: PointsReason.CourseCompleted,
+    sourceType: PointsSourceType.Course,
+    sourceId: courseId,
+  });
+
+  // Already paid for — nothing new happened, so there is nothing to celebrate.
+  return award.awarded ? { courseId, points: award.amount } : null;
 }
 
 /**

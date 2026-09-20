@@ -1,8 +1,10 @@
 import { describe, it, expect } from "vitest";
 import {
+  POINTS_PER_COURSE_COMPLETION,
   POINTS_PER_LESSON_COMPLETION,
   POINTS_PER_QUIZ_PASS,
   STREAK_MILESTONES,
+  pointsForCourseCompletion,
   pointsForLessonCompletion,
   pointsForQuizPass,
   streakMilestoneFor,
@@ -54,6 +56,35 @@ describe("pointsRules", () => {
 
     it("pins the current tuning value", () => {
       expect(POINTS_PER_QUIZ_PASS).toBe(25);
+    });
+  });
+
+  describe("pointsForCourseCompletion", () => {
+    it("returns the configured point value for finishing a course", () => {
+      expect(pointsForCourseCompletion()).toBe(POINTS_PER_COURSE_COMPLETION);
+    });
+
+    it("awards a positive number of points", () => {
+      expect(pointsForCourseCompletion()).toBeGreaterThan(0);
+    });
+
+    it("awards a whole number of points", () => {
+      expect(Number.isInteger(pointsForCourseCompletion())).toBe(true);
+    });
+
+    it("is stable across calls", () => {
+      expect(pointsForCourseCompletion()).toBe(pointsForCourseCompletion());
+    });
+
+    it("is worth more than any single lesson or quiz inside the course", () => {
+      expect(pointsForCourseCompletion()).toBeGreaterThan(
+        pointsForLessonCompletion()
+      );
+      expect(pointsForCourseCompletion()).toBeGreaterThan(pointsForQuizPass());
+    });
+
+    it("pins the current tuning value", () => {
+      expect(POINTS_PER_COURSE_COMPLETION).toBe(200);
     });
   });
 

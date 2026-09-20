@@ -30,6 +30,24 @@ export function pointsForQuizPass(): number {
   return POINTS_PER_QUIZ_PASS;
 }
 
+/**
+ * Points earned the first time a student completes every lesson in a course.
+ * Deliberately a large round number: finishing a course is the outcome the
+ * whole system exists to drive, and the bonus should not read as "one more
+ * lesson". It is worth more than any single lesson or quiz inside the course,
+ * but less than the course's own lessons add up to — the bonus tops the work
+ * off rather than dwarfing it.
+ */
+export const POINTS_PER_COURSE_COMPLETION = 200;
+
+/**
+ * The points finishing a course is worth. Paid once per course — the ledger's
+ * key, not this number, is what enforces that.
+ */
+export function pointsForCourseCompletion(): number {
+  return POINTS_PER_COURSE_COMPLETION;
+}
+
 /** A run of consecutive days worth a bonus, and what that bonus is. */
 export type StreakMilestone = {
   /** The length of run, in consecutive days, that reaches this milestone. */

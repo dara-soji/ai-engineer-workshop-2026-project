@@ -225,6 +225,24 @@ export function getTotalLessonCount(courseId: number) {
   return getCourseLessonIds(courseId).length;
 }
 
+/**
+ * The course a lesson belongs to, or null if there is no such lesson.
+ *
+ * A lesson reaches its course through its module, so callers holding only a
+ * lesson id — the lesson route, and the gamification service deciding whether a
+ * completion finished a course — do not have to make that hop themselves.
+ */
+export function getCourseIdForLesson(lessonId: number): number | null {
+  const result = db
+    .select({ courseId: modules.courseId })
+    .from(lessons)
+    .innerJoin(modules, eq(lessons.moduleId, modules.id))
+    .where(eq(lessons.id, lessonId))
+    .get();
+
+  return result?.courseId ?? null;
+}
+
 export function isLessonCompleted(userId: number, lessonId: number) {
   const progress = getLessonProgress(userId, lessonId);
   return progress?.status === LessonProgressStatus.Completed;

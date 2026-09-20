@@ -20,6 +20,7 @@ import {
   resetLessonProgress,
   calculateProgress,
   getCompletedLessonCount,
+  getCourseIdForLesson,
   getTotalLessonCount,
   isLessonCompleted,
   getNextIncompleteLesson,
@@ -422,6 +423,50 @@ describe("progressService", () => {
 
     it("returns 0 for a course with no lessons", () => {
       expect(getTotalLessonCount(base.course.id)).toBe(0);
+    });
+  });
+
+  describe("getCourseIdForLesson", () => {
+    it("returns the course the lesson's module belongs to", () => {
+      const { lessons } = createModuleWithLessons(
+        base.course.id,
+        "Module 1",
+        1,
+        1
+      );
+
+      expect(getCourseIdForLesson(lessons[0].id)).toBe(base.course.id);
+    });
+
+    it("finds the course from any module of it", () => {
+      createModuleWithLessons(base.course.id, "Module 1", 1, 2);
+      const second = createModuleWithLessons(base.course.id, "Module 2", 2, 2);
+
+      expect(getCourseIdForLesson(second.lessons[1].id)).toBe(base.course.id);
+    });
+
+    it("tells each course's lessons apart", () => {
+      const other = testDb
+        .insert(schema.courses)
+        .values({
+          title: "Other Course",
+          slug: "other-course",
+          description: "Another test course",
+          instructorId: base.instructor.id,
+          categoryId: base.category.id,
+          status: schema.CourseStatus.Published,
+        })
+        .returning()
+        .get();
+      const mine = createModuleWithLessons(base.course.id, "Module 1", 1, 1);
+      const theirs = createModuleWithLessons(other.id, "Module 1", 1, 1);
+
+      expect(getCourseIdForLesson(mine.lessons[0].id)).toBe(base.course.id);
+      expect(getCourseIdForLesson(theirs.lessons[0].id)).toBe(other.id);
+    });
+
+    it("returns null for a lesson that does not exist", () => {
+      expect(getCourseIdForLesson(9999)).toBeNull();
     });
   });
 

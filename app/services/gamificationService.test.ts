@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { createTestDb, seedBaseData } from "~/test/setup";
 import * as schema from "~/db/schema";
 import {
+  POINTS_PER_COURSE_COMPLETION,
   POINTS_PER_LESSON_COMPLETION,
   POINTS_PER_QUIZ_PASS,
   STREAK_MILESTONES,
@@ -28,7 +29,12 @@ import {
 import { markLessonComplete, resetLessonProgress } from "./progressService";
 import { computeResult } from "./quizScoringService";
 
-// Helper to create a module with lessons in the test db
+/**
+ * A module of `count` lessons in the base course — plus one more the caller is
+ * never handed, so completing everything this returns leaves the course
+ * unfinished. The course completion bonus has its own block below, and must not
+ * turn up in the arithmetic of tests about something else.
+ */
 function createLessons(count: number) {
   const mod = testDb
     .insert(schema.modules)
@@ -36,13 +42,13 @@ function createLessons(count: number) {
     .returning()
     .get();
 
-  return Array.from({ length: count }, (_, i) =>
+  return Array.from({ length: count + 1 }, (_, i) =>
     testDb
       .insert(schema.lessons)
       .values({ moduleId: mod.id, title: `Lesson ${i + 1}`, position: i + 1 })
       .returning()
       .get()
-  );
+  ).slice(0, count);
 }
 
 describe("gamificationService", () => {
@@ -574,6 +580,255 @@ describe("gamificationService", () => {
       const summary = recordLessonCompletion(base.user.id, lesson.id);
 
       expect(summary.streakMilestone).toBeNull();
+    });
+  });
+
+  describe("recordLessonCompletion — course completion bonus", () => {
+    /** A second course, so a student can finish one and not the other. */
+    function createCourse(slug: string) {
+      return testDb
+        .insert(schema.courses)
+        .values({
+          title: `Course ${slug}`,
+          slug,
+          description: "Another test course",
+          instructorId: base.instructor.id,
+          categoryId: base.category.id,
+          status: schema.CourseStatus.Published,
+        })
+        .returning()
+        .get();
+    }
+
+    /** A course's lessons, one module per entry, that many lessons in each. */
+    function createLessonsInCourse(
+      courseId: number,
+      lessonsPerModule: number[]
+    ) {
+      return lessonsPerModule.flatMap((count, m) => {
+        const mod = testDb
+          .insert(schema.modules)
+          .values({ courseId, title: `Module ${m + 1}`, position: m + 1 })
+          .returning()
+          .get();
+
+        return Array.from({ length: count }, (_, i) =>
+          testDb
+            .insert(schema.lessons)
+            .values({
+              moduleId: mod.id,
+              title: `Lesson ${i + 1}`,
+              position: i + 1,
+            })
+            .returning()
+            .get()
+        );
+      });
+    }
+
+    /** Completes a lesson the way the route does: progress, then gamification. */
+    function complete(userId: number, lessonId: number) {
+      markLessonComplete(userId, lessonId);
+      return recordLessonCompletion(userId, lessonId);
+    }
+
+    /** Completes every given lesson in order, and returns every summary. */
+    function completeAll(userId: number, lessons: Array<{ id: number }>) {
+      return lessons.map((lesson) => complete(userId, lesson.id));
+    }
+
+    it("awards the bonus on the completion that finishes the course", () => {
+      const lessons = createLessonsInCourse(base.course.id, [3]);
+
+      const summaries = completeAll(base.user.id, lessons);
+
+      expect(summaries.at(-1)!.courseCompletion).toEqual({
+        courseId: base.course.id,
+        points: POINTS_PER_COURSE_COMPLETION,
+      });
+    });
+
+    it("counts the bonus in the points that completion earned", () => {
+      const lessons = createLessonsInCourse(base.course.id, [3]);
+
+      const summaries = completeAll(base.user.id, lessons);
+
+      expect(summaries.at(-1)!.pointsAwarded).toBe(
+        POINTS_PER_LESSON_COMPLETION + POINTS_PER_COURSE_COMPLETION
+      );
+    });
+
+    it("adds the bonus to the student's total", () => {
+      const lessons = createLessonsInCourse(base.course.id, [3]);
+
+      completeAll(base.user.id, lessons);
+
+      expect(getPointsTotal(base.user.id)).toBe(
+        POINTS_PER_LESSON_COMPLETION * 3 + POINTS_PER_COURSE_COMPLETION
+      );
+    });
+
+    it("awards no bonus on the lessons that leave the course unfinished", () => {
+      const lessons = createLessonsInCourse(base.course.id, [3]);
+
+      const summaries = completeAll(base.user.id, lessons.slice(0, 2));
+
+      expect(summaries.map((s) => s.courseCompletion)).toEqual([null, null]);
+      expect(summaries.map((s) => s.pointsAwarded)).toEqual([
+        POINTS_PER_LESSON_COMPLETION,
+        POINTS_PER_LESSON_COMPLETION,
+      ]);
+      expect(getPointsTotal(base.user.id)).toBe(
+        POINTS_PER_LESSON_COMPLETION * 2
+      );
+    });
+
+    it("waits for the lessons in every module of the course", () => {
+      const lessons = createLessonsInCourse(base.course.id, [2, 2]);
+
+      const summaries = completeAll(base.user.id, lessons);
+
+      expect(summaries.slice(0, 3).map((s) => s.courseCompletion)).toEqual([
+        null,
+        null,
+        null,
+      ]);
+      expect(summaries.at(-1)!.courseCompletion).not.toBeNull();
+    });
+
+    it("does not pay again when the final lesson is completed a second time", () => {
+      const lessons = createLessonsInCourse(base.course.id, [3]);
+
+      completeAll(base.user.id, lessons);
+      const again = complete(base.user.id, lessons.at(-1)!.id);
+
+      expect(again.courseCompletion).toBeNull();
+      expect(again.pointsAwarded).toBe(0);
+      expect(getPointsTotal(base.user.id)).toBe(
+        POINTS_PER_LESSON_COMPLETION * 3 + POINTS_PER_COURSE_COMPLETION
+      );
+    });
+
+    it("does not pay again when any lesson of a finished course is revisited", () => {
+      const lessons = createLessonsInCourse(base.course.id, [3]);
+
+      completeAll(base.user.id, lessons);
+      const again = complete(base.user.id, lessons[0].id);
+
+      expect(again.courseCompletion).toBeNull();
+      expect(getPointsTotal(base.user.id)).toBe(
+        POINTS_PER_LESSON_COMPLETION * 3 + POINTS_PER_COURSE_COMPLETION
+      );
+    });
+
+    it("pays the bonus on a completion that earned no lesson points", () => {
+      const lessons = createLessonsInCourse(base.course.id, [2]);
+
+      complete(base.user.id, lessons[0].id);
+      // The second lesson's progress lands without the award — the state a
+      // request that failed after writing progress would leave behind.
+      markLessonComplete(base.user.id, lessons[1].id);
+      // Re-reading a lesson already paid for still finds the course finished.
+      const summary = complete(base.user.id, lessons[0].id);
+
+      expect(summary.courseCompletion).toEqual({
+        courseId: base.course.id,
+        points: POINTS_PER_COURSE_COMPLETION,
+      });
+      expect(summary.pointsAwarded).toBe(POINTS_PER_COURSE_COMPLETION);
+    });
+
+    it("pays for each course the student finishes", () => {
+      const first = createLessonsInCourse(base.course.id, [2]);
+      const second = createCourse("second-course");
+      const secondLessons = createLessonsInCourse(second.id, [2]);
+
+      const firstSummary = completeAll(base.user.id, first).at(-1)!;
+      const secondSummary = completeAll(base.user.id, secondLessons).at(-1)!;
+
+      expect(firstSummary.courseCompletion?.courseId).toBe(base.course.id);
+      expect(secondSummary.courseCompletion?.courseId).toBe(second.id);
+      expect(getPointsTotal(base.user.id)).toBe(
+        POINTS_PER_LESSON_COMPLETION * 4 + POINTS_PER_COURSE_COMPLETION * 2
+      );
+    });
+
+    it("does not pay for a course the student has not finished", () => {
+      const lessons = createLessonsInCourse(base.course.id, [2]);
+      const other = createCourse("second-course");
+      const otherLessons = createLessonsInCourse(other.id, [2]);
+
+      completeAll(base.user.id, lessons);
+      const summary = complete(base.user.id, otherLessons[0].id);
+
+      expect(summary.courseCompletion).toBeNull();
+    });
+
+    it("keeps one student's course bonus out of another's", () => {
+      const lessons = createLessonsInCourse(base.course.id, [2]);
+      const other = testDb
+        .insert(schema.users)
+        .values({
+          name: "Other Student",
+          email: "other@example.com",
+          role: schema.UserRole.Student,
+        })
+        .returning()
+        .get();
+
+      completeAll(base.user.id, lessons);
+      const summary = complete(other.id, lessons[0].id);
+
+      expect(summary.courseCompletion).toBeNull();
+      expect(getPointsTotal(other.id)).toBe(POINTS_PER_LESSON_COMPLETION);
+    });
+
+    it("lets a second student earn a course the first has already finished", () => {
+      const lessons = createLessonsInCourse(base.course.id, [2]);
+      const other = testDb
+        .insert(schema.users)
+        .values({
+          name: "Other Student",
+          email: "other@example.com",
+          role: schema.UserRole.Student,
+        })
+        .returning()
+        .get();
+
+      completeAll(base.user.id, lessons);
+      const summary = completeAll(other.id, lessons).at(-1)!;
+
+      expect(summary.courseCompletion?.points).toBe(
+        POINTS_PER_COURSE_COMPLETION
+      );
+    });
+
+    it("awards no bonus for a lesson that belongs to no course", () => {
+      const summary = recordLessonCompletion(base.user.id, 9999);
+
+      expect(summary.courseCompletion).toBeNull();
+      expect(summary.pointsAwarded).toBe(POINTS_PER_LESSON_COMPLETION);
+    });
+
+    it("counts the bonus towards the level it reports", () => {
+      const lessons = createLessonsInCourse(base.course.id, [2]);
+
+      const summary = completeAll(base.user.id, lessons).at(-1)!;
+
+      const dashboard = getPointsSummary(base.user.id);
+      expect(summary.totalPoints).toBe(dashboard.totalPoints);
+      expect(summary.level).toEqual(dashboard.level);
+    });
+
+    it("reports the level-up the bonus itself carried the student into", () => {
+      const lessons = createLessonsInCourse(base.course.id, [2]);
+
+      const summaries = completeAll(base.user.id, lessons);
+
+      // Two lessons alone stay inside level one; the bonus is what crosses.
+      expect(summaries[0].leveledUp).toBe(false);
+      expect(summaries.at(-1)!.leveledUp).toBe(true);
+      expect(summaries.at(-1)!.level.level).toBeGreaterThan(1);
     });
   });
 
