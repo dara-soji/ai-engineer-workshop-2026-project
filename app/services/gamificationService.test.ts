@@ -22,6 +22,7 @@ vi.mock("~/db", () => ({
 import {
   recordLessonCompletion,
   recordQuizAttempt,
+  getCoursePointsTotal,
   getPointsTotal,
   getPointsSummary,
   getStreak,
@@ -1101,6 +1102,200 @@ describe("gamificationService", () => {
       const retake = sitQuiz(base.user.id, quiz, 4);
 
       expect(retake.leveledUp).toBe(false);
+    });
+  });
+
+  describe("getCoursePointsTotal", () => {
+    /** A second course, so a student's effort can be split across two. */
+    function createCourse(slug: string) {
+      return testDb
+        .insert(schema.courses)
+        .values({
+          title: `Course ${slug}`,
+          slug,
+          description: "Another test course",
+          instructorId: base.instructor.id,
+          categoryId: base.category.id,
+          status: schema.CourseStatus.Published,
+        })
+        .returning()
+        .get();
+    }
+
+    /** `count` lessons in the given course, all in one module. */
+    function createLessonsInCourse(courseId: number, count: number) {
+      const mod = testDb
+        .insert(schema.modules)
+        .values({ courseId, title: "Module 1", position: 1 })
+        .returning()
+        .get();
+
+      return Array.from({ length: count }, (_, i) =>
+        testDb
+          .insert(schema.lessons)
+          .values({
+            moduleId: mod.id,
+            title: `Lesson ${i + 1}`,
+            position: i + 1,
+          })
+          .returning()
+          .get()
+      );
+    }
+
+    /** A quiz on the given lesson. */
+    function createQuizOn(lessonId: number) {
+      return testDb
+        .insert(schema.quizzes)
+        .values({ lessonId, title: "Quiz", passingScore: 0.7 })
+        .returning()
+        .get();
+    }
+
+    /** Completes a lesson the way the route does: progress, then points. */
+    function complete(userId: number, lessonId: number) {
+      markLessonComplete(userId, lessonId);
+      return recordLessonCompletion(userId, lessonId);
+    }
+
+    it("is zero for a course the student has earned nothing in", () => {
+      createLessonsInCourse(base.course.id, 2);
+
+      expect(getCoursePointsTotal(base.user.id, base.course.id)).toBe(0);
+    });
+
+    it("counts a lesson completed in the course", () => {
+      const [lesson] = createLessonsInCourse(base.course.id, 2);
+
+      complete(base.user.id, lesson.id);
+
+      expect(getCoursePointsTotal(base.user.id, base.course.id)).toBe(
+        POINTS_PER_LESSON_COMPLETION
+      );
+    });
+
+    it("accumulates across the course's lessons", () => {
+      const lessons = createLessonsInCourse(base.course.id, 3);
+
+      complete(base.user.id, lessons[0].id);
+      complete(base.user.id, lessons[1].id);
+
+      expect(getCoursePointsTotal(base.user.id, base.course.id)).toBe(
+        POINTS_PER_LESSON_COMPLETION * 2
+      );
+    });
+
+    it("counts a quiz passed in the course", () => {
+      const [lesson] = createLessonsInCourse(base.course.id, 2);
+      const quiz = createQuizOn(lesson.id);
+
+      recordQuizAttempt(base.user.id, quiz.id, true);
+
+      expect(getCoursePointsTotal(base.user.id, base.course.id)).toBe(
+        POINTS_PER_QUIZ_PASS
+      );
+    });
+
+    it("counts the bonus for finishing the course", () => {
+      const lessons = createLessonsInCourse(base.course.id, 2);
+
+      lessons.forEach((lesson) => complete(base.user.id, lesson.id));
+
+      expect(getCoursePointsTotal(base.user.id, base.course.id)).toBe(
+        POINTS_PER_LESSON_COMPLETION * 2 + POINTS_PER_COURSE_COMPLETION
+      );
+    });
+
+    it("does not count the points earned in another course", () => {
+      const other = createCourse("second-course");
+      const [mine] = createLessonsInCourse(base.course.id, 2);
+      const theirs = createLessonsInCourse(other.id, 2);
+      const theirQuiz = createQuizOn(theirs[0].id);
+
+      complete(base.user.id, mine.id);
+      theirs.forEach((lesson) => complete(base.user.id, lesson.id));
+      recordQuizAttempt(base.user.id, theirQuiz.id, true);
+
+      expect(getCoursePointsTotal(base.user.id, base.course.id)).toBe(
+        POINTS_PER_LESSON_COMPLETION
+      );
+      expect(getCoursePointsTotal(base.user.id, other.id)).toBe(
+        POINTS_PER_LESSON_COMPLETION * 2 +
+          POINTS_PER_COURSE_COMPLETION +
+          POINTS_PER_QUIZ_PASS
+      );
+    });
+
+    it("is every point the student earned when one course is all they did", () => {
+      const lessons = createLessonsInCourse(base.course.id, 2);
+      const quiz = createQuizOn(lessons[0].id);
+
+      lessons.forEach((lesson) => complete(base.user.id, lesson.id));
+      recordQuizAttempt(base.user.id, quiz.id, true);
+
+      expect(getCoursePointsTotal(base.user.id, base.course.id)).toBe(
+        getPointsTotal(base.user.id)
+      );
+    });
+
+    it("awards nothing more for a lesson completed twice", () => {
+      const [lesson] = createLessonsInCourse(base.course.id, 2);
+
+      complete(base.user.id, lesson.id);
+      complete(base.user.id, lesson.id);
+
+      expect(getCoursePointsTotal(base.user.id, base.course.id)).toBe(
+        POINTS_PER_LESSON_COMPLETION
+      );
+    });
+
+    it("keeps each student's points to themselves", () => {
+      const [lesson] = createLessonsInCourse(base.course.id, 2);
+      const other = testDb
+        .insert(schema.users)
+        .values({
+          name: "Other Student",
+          email: "other@example.com",
+          role: schema.UserRole.Student,
+        })
+        .returning()
+        .get();
+
+      complete(base.user.id, lesson.id);
+
+      expect(getCoursePointsTotal(other.id, base.course.id)).toBe(0);
+    });
+
+    describe("streak milestones", () => {
+      // A streak is built from days of effort across whatever the student was
+      // studying, so it is attributed to no course at all.
+      const FIRST = STREAK_MILESTONES[0];
+      const DAY_ZERO = Date.UTC(2026, 2, 15);
+
+      beforeEach(() => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(new Date(DAY_ZERO));
+      });
+
+      afterEach(() => {
+        vi.useRealTimers();
+      });
+
+      it("leaves a milestone bonus out of every course's total", () => {
+        const lessons = createLessonsInCourse(base.course.id, FIRST.days + 1);
+
+        lessons.slice(0, FIRST.days).forEach((lesson, day) => {
+          vi.setSystemTime(new Date(DAY_ZERO + day * 86_400_000));
+          complete(base.user.id, lesson.id);
+        });
+
+        expect(getCoursePointsTotal(base.user.id, base.course.id)).toBe(
+          POINTS_PER_LESSON_COMPLETION * FIRST.days
+        );
+        expect(getPointsTotal(base.user.id)).toBe(
+          POINTS_PER_LESSON_COMPLETION * FIRST.days + FIRST.points
+        );
+      });
     });
   });
 });

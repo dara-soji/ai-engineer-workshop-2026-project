@@ -1,6 +1,13 @@
-import { eq, sql } from "drizzle-orm";
+import { and, eq, inArray, or, sql } from "drizzle-orm";
 import { db } from "~/db";
-import { pointsEvents, PointsReason, PointsSourceType } from "~/db/schema";
+import {
+  lessons,
+  modules,
+  pointsEvents,
+  PointsReason,
+  PointsSourceType,
+  quizzes,
+} from "~/db/schema";
 
 // ─── Points Ledger Service ───
 // Owns the points_events table: the append-only record of every point a
@@ -59,6 +66,64 @@ export function getPointsTotal(userId: number): number {
     .select({ total: sql<number>`coalesce(sum(${pointsEvents.amount}), 0)` })
     .from(pointsEvents)
     .where(eq(pointsEvents.userId, userId))
+    .get();
+
+  return result?.total ?? 0;
+}
+
+/**
+ * The points the student earned *within* a course: its lessons, the quizzes on
+ * those lessons, and the bonus for finishing the course itself. Zero for a
+ * course they have earned nothing in, and for a course that does not exist.
+ *
+ * Attribution is a read over the events already recorded — every award names
+ * what caused it, so nothing has to be stored per course. Each source type is
+ * matched against its own table, because lesson ids and quiz ids are counted
+ * separately and the same number can be both.
+ *
+ * Streak milestones are deliberately left out. A streak is built from days of
+ * effort across whatever the student was studying, so it belongs to no one
+ * course; the per-course totals therefore need not add up to the global one.
+ */
+export function getCoursePointsTotal(
+  userId: number,
+  courseId: number
+): number {
+  const courseLessonIds = db
+    .select({ id: lessons.id })
+    .from(lessons)
+    .innerJoin(modules, eq(lessons.moduleId, modules.id))
+    .where(eq(modules.courseId, courseId));
+
+  const courseQuizIds = db
+    .select({ id: quizzes.id })
+    .from(quizzes)
+    .innerJoin(lessons, eq(quizzes.lessonId, lessons.id))
+    .innerJoin(modules, eq(lessons.moduleId, modules.id))
+    .where(eq(modules.courseId, courseId));
+
+  const result = db
+    .select({ total: sql<number>`coalesce(sum(${pointsEvents.amount}), 0)` })
+    .from(pointsEvents)
+    .where(
+      and(
+        eq(pointsEvents.userId, userId),
+        or(
+          and(
+            eq(pointsEvents.sourceType, PointsSourceType.Lesson),
+            inArray(pointsEvents.sourceId, courseLessonIds)
+          ),
+          and(
+            eq(pointsEvents.sourceType, PointsSourceType.Quiz),
+            inArray(pointsEvents.sourceId, courseQuizIds)
+          ),
+          and(
+            eq(pointsEvents.sourceType, PointsSourceType.Course),
+            eq(pointsEvents.sourceId, courseId)
+          )
+        )
+      )
+    )
     .get();
 
   return result?.total ?? 0;

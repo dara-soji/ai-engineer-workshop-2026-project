@@ -2,7 +2,7 @@ import { Link } from "react-router";
 import type { Route } from "./+types/dashboard";
 import { getUserEnrolledCourses } from "~/services/enrollmentService";
 import { calculateProgress, getCompletedLessonCount, getTotalLessonCount, getNextIncompleteLesson } from "~/services/progressService";
-import { getPointsSummary, getStreak } from "~/services/gamificationService";
+import { getCoursePointsTotal, getPointsSummary, getStreak } from "~/services/gamificationService";
 import { getCurrentUserId } from "~/lib/session";
 import { Card, CardContent, CardFooter, CardHeader } from "~/components/ui/card";
 import { Button } from "~/components/ui/button";
@@ -46,6 +46,10 @@ export async function loader({ request }: Route.LoaderArgs) {
       enrollment.courseId
     );
     const isCompleted = enrollment.completedAt !== null;
+    const coursePoints = getCoursePointsTotal(
+      currentUserId,
+      enrollment.courseId
+    );
 
     return {
       ...enrollment,
@@ -54,6 +58,7 @@ export async function loader({ request }: Route.LoaderArgs) {
       totalLessons,
       nextLessonId: nextLesson?.id ?? null,
       isCompleted,
+      coursePoints,
     };
   });
 
@@ -64,6 +69,26 @@ export async function loader({ request }: Route.LoaderArgs) {
   const streak = getStreak(currentUserId);
 
   return { inProgressCourses, completedCourses, totalPoints, level, streak };
+}
+
+/**
+ * The points a student has earned inside one course, tying the total on this
+ * page back to the work that produced it. A course they have earned nothing in
+ * yet says so, rather than showing a bare zero.
+ */
+function CoursePoints({ points }: { points: number }) {
+  return (
+    <div className="mt-3 flex items-center gap-1.5 text-sm text-muted-foreground">
+      <Sparkles className="size-4 text-primary" />
+      <span>
+        {points === 0
+          ? "No points earned yet"
+          : `${points.toLocaleString()} ${
+              points === 1 ? "point" : "points"
+            } earned`}
+      </span>
+    </div>
+  );
 }
 
 function DashboardCardSkeleton() {
@@ -80,6 +105,7 @@ function DashboardCardSkeleton() {
           <Skeleton className="h-4 w-10" />
         </div>
         <Skeleton className="h-2 w-full rounded-full" />
+        <Skeleton className="mt-3 h-4 w-32" />
       </CardContent>
       <CardFooter>
         <Skeleton className="h-10 w-full" />
@@ -262,6 +288,7 @@ export default function Dashboard({ loaderData }: Route.ComponentProps) {
                           style={{ width: `${course.progress}%` }}
                         />
                       </div>
+                      <CoursePoints points={course.coursePoints} />
                     </CardContent>
                     <CardFooter>
                       {course.nextLessonId ? (
@@ -327,6 +354,7 @@ export default function Dashboard({ loaderData }: Route.ComponentProps) {
                           Completed — {course.totalLessons} lessons
                         </span>
                       </div>
+                      <CoursePoints points={course.coursePoints} />
                     </CardContent>
                     <CardFooter>
                       <Link
