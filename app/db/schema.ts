@@ -38,6 +38,7 @@ export enum TeamMemberRole {
 export enum PointsReason {
   LessonCompleted = "lesson_completed",
   QuizPassed = "quiz_passed",
+  CourseCompleted = "course_completed",
   StreakMilestoneReached = "streak_milestone_reached",
 }
 
@@ -45,6 +46,7 @@ export enum PointsReason {
 export enum PointsSourceType {
   Lesson = "lesson",
   Quiz = "quiz",
+  Course = "course",
   /** A streak milestone, identified by the day count it is a milestone for. */
   Streak = "streak",
 }

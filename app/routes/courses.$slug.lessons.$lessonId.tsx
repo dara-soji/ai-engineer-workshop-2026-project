@@ -45,6 +45,7 @@ import {
   Clock,
   Flame,
   Github,
+  GraduationCap,
   HelpCircle,
   MapPin,
   PlayCircle,
@@ -433,6 +434,15 @@ export default function LessonViewer({ loaderData }: Route.ComponentProps) {
       icon: <Sparkles className="size-4" />,
     });
 
+    if (completion.courseCompletion) {
+      toast(`${course.title} complete!`, {
+        description: `+${completion.courseCompletion.points} bonus points for finishing the whole course.`,
+        icon: <GraduationCap className="size-5 text-emerald-600" />,
+        duration: 10000,
+        className: "border-emerald-500/60 bg-emerald-50 dark:bg-emerald-950",
+      });
+    }
+
     if (completion.streakMilestone) {
       toast(`${completion.streakMilestone.days} day streak!`, {
         description: `+${completion.streakMilestone.points} bonus points for showing up ${completion.streakMilestone.days} days running.`,
@@ -455,7 +465,7 @@ export default function LessonViewer({ loaderData }: Route.ComponentProps) {
         className: "border-amber-500/60 bg-amber-50 dark:bg-amber-950",
       });
     }
-  }, [completion]);
+  }, [completion, course.title]);
 
   const quizResult = quizFetcher.data?.quizResult ?? null;
   const isSubmittingQuiz = quizFetcher.state !== "idle";
@@ -632,6 +642,24 @@ export default function LessonViewer({ loaderData }: Route.ComponentProps) {
           {/* Mark Complete / Up Next */}
           {enrolled && currentUserId && (
             <div className="mb-8">
+              {/* The toast is gone in ten seconds; finishing a course is worth
+                  more than that, and this is the page the student is left on
+                  when the final lesson was the last one. */}
+              {completion?.courseCompletion && (
+                <div className="mb-4 flex items-center gap-3 rounded-lg border border-emerald-500/60 bg-emerald-50 p-4 dark:bg-emerald-950">
+                  <GraduationCap className="size-8 shrink-0 text-emerald-600" />
+                  <div>
+                    <p className="font-semibold text-emerald-700 dark:text-emerald-400">
+                      You finished {course.title}!
+                    </p>
+                    <p className="text-sm text-muted-foreground">
+                      +{completion.courseCompletion.points} bonus points for
+                      completing every lesson.
+                    </p>
+                  </div>
+                </div>
+              )}
+
               {isCompleted ? (
                 <div className="flex items-center gap-3">
                   <div className="flex items-center gap-2 text-green-600">
