@@ -41,6 +41,7 @@ import {
   ChevronRight,
   Circle,
   Clock,
+  Flame,
   Github,
   HelpCircle,
   MapPin,
@@ -415,8 +416,9 @@ export default function LessonViewer({ loaderData }: Route.ComponentProps) {
   }, [justCompleted, nextLesson, course.slug, navigate]);
 
   // Connect the reward to the action that earned it. A completion that awarded
-  // nothing — a lesson already counted — says nothing. The toasts live in the
-  // app layout, so they survive the jump to the next lesson.
+  // nothing — a lesson already counted, no milestone reached — says nothing.
+  // The toasts live in the app layout, so they survive the jump to the next
+  // lesson.
   useEffect(() => {
     if (!completion || completion.pointsAwarded === 0) return;
 
@@ -424,6 +426,15 @@ export default function LessonViewer({ loaderData }: Route.ComponentProps) {
       description: `${completion.totalPoints.toLocaleString()} points in total`,
       icon: <Sparkles className="size-4" />,
     });
+
+    if (completion.streakMilestone) {
+      toast(`${completion.streakMilestone.days} day streak!`, {
+        description: `+${completion.streakMilestone.points} bonus points for showing up ${completion.streakMilestone.days} days running.`,
+        icon: <Flame className="size-5 text-orange-500" />,
+        duration: 8000,
+        className: "border-orange-500/60 bg-orange-50 dark:bg-orange-950",
+      });
+    }
 
     if (completion.leveledUp) {
       toast(`Level ${completion.level.level} reached!`, {
