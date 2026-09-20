@@ -1,4 +1,4 @@
-import { eq, and, sql } from "drizzle-orm";
+import { eq, and, desc, sql } from "drizzle-orm";
 import { db } from "~/db";
 import {
   quizzes,
@@ -7,9 +7,27 @@ import {
   quizAttempts,
   quizAnswers,
 } from "~/db/schema";
-import Database from "better-sqlite3";
 
-const rawDb = new Database("data.db");
+// ─── Grading ───
+// The single source of truth for grade thresholds. Nothing else in the
+// codebase maps a score to a letter grade.
+const GRADE_THRESHOLDS = [
+  { minScore: 0.9, grade: "A" },
+  { minScore: 0.8, grade: "B" },
+  { minScore: 0.7, grade: "C" },
+  { minScore: 0.6, grade: "D" },
+] as const;
+
+const LOWEST_GRADE = "F";
+
+/**
+ * Whether a score passes the quiz. The passing score configured on the quiz
+ * governs, and the comparison is inclusive — a score exactly at the passing
+ * mark is a pass.
+ */
+function isPassingScore(score: number, passingScore: number): boolean {
+  return score >= passingScore;
+}
 
 function scoreMultipleChoiceQuestions(quizData: any, answers: any): any {
   let correctCount = 0;
@@ -118,21 +136,8 @@ export function getScore(quizId: any, answers: any): any {
     const totalQuestions = mcResult.total + tfResult.total;
     const overallScore = totalQuestions > 0 ? totalCorrect / totalQuestions : 0;
 
-    let passed = false;
-    if (overallScore > 0.7) {
-      passed = true;
-    }
-
-    let grade = "F";
-    if (overallScore >= 0.9) {
-      grade = "A";
-    } else if (overallScore >= 0.8) {
-      grade = "B";
-    } else if (overallScore >= 0.7) {
-      grade = "C";
-    } else if (overallScore >= 0.6) {
-      grade = "D";
-    }
+    const passed = isPassingScore(overallScore, quiz.passingScore);
+    const grade = calculateGrade(overallScore);
 
     return {
       score: overallScore,
@@ -151,14 +156,11 @@ export function getScore(quizId: any, answers: any): any {
 
 export function calculateGrade(score: any): any {
   try {
-    if (score >= 0.9) return "A";
-    if (score >= 0.8) return "B";
-    if (score >= 0.7) return "C";
-    if (score >= 0.6) return "D";
-    return "F";
+    const threshold = GRADE_THRESHOLDS.find((t) => score >= t.minScore);
+    return threshold ? threshold.grade : LOWEST_GRADE;
   } catch (e) {
     console.log(e);
-    return "F";
+    return LOWEST_GRADE;
   }
 }
 
@@ -234,7 +236,7 @@ export function computeResult(
     }
 
     const scoreValue = total > 0 ? correct / total : 0;
-    const passed = scoreValue > 0.7;
+    const passed = isPassingScore(scoreValue, quiz.passingScore);
     const grade = calculateGrade(scoreValue);
 
     const attempt = db
@@ -277,17 +279,17 @@ export function computeResult(
 
 export function getQuizStats(quizId: any): any {
   try {
-    const rows: any = rawDb
-      .prepare(
-        `SELECT
-        COUNT(*) as total_attempts,
-        AVG(score) as avg_score,
-        MAX(score) as high_score,
-        MIN(score) as low_score,
-        SUM(CASE WHEN passed = 1 THEN 1 ELSE 0 END) as pass_count
-      FROM quiz_attempts WHERE quiz_id = ?`
-      )
-      .get(quizId);
+    const rows = db
+      .select({
+        total_attempts: sql<number>`count(*)`,
+        avg_score: sql<number>`avg(${quizAttempts.score})`,
+        high_score: sql<number>`max(${quizAttempts.score})`,
+        low_score: sql<number>`min(${quizAttempts.score})`,
+        pass_count: sql<number>`sum(case when ${quizAttempts.passed} = 1 then 1 else 0 end)`,
+      })
+      .from(quizAttempts)
+      .where(eq(quizAttempts.quizId, quizId))
+      .get();
 
     if (!rows || rows.total_attempts === 0) {
       return {
@@ -320,32 +322,27 @@ export function getQuizStats(quizId: any): any {
 
 export function getUserQuizHistory(userId: any, quizId: any): any {
   try {
-    const attempts = rawDb
-      .prepare(
-        `SELECT id, score, passed, attempted_at FROM quiz_attempts
-       WHERE user_id = ? AND quiz_id = ?
-       ORDER BY attempted_at DESC`
+    const attempts = db
+      .select({
+        id: quizAttempts.id,
+        score: quizAttempts.score,
+        passed: quizAttempts.passed,
+        attemptedAt: quizAttempts.attemptedAt,
+      })
+      .from(quizAttempts)
+      .where(
+        and(eq(quizAttempts.userId, userId), eq(quizAttempts.quizId, quizId))
       )
-      .all(userId, quizId) as any[];
+      .orderBy(desc(quizAttempts.attemptedAt))
+      .all();
 
-    const results = [];
-    for (const attempt of attempts) {
-      let grade = "F";
-      if (attempt.score >= 0.9) grade = "A";
-      else if (attempt.score >= 0.8) grade = "B";
-      else if (attempt.score >= 0.7) grade = "C";
-      else if (attempt.score >= 0.6) grade = "D";
-
-      results.push({
-        attemptId: attempt.id,
-        score: attempt.score,
-        passed: attempt.passed === 1,
-        grade,
-        attemptedAt: attempt.attempted_at,
-      });
-    }
-
-    return results;
+    return attempts.map((attempt) => ({
+      attemptId: attempt.id,
+      score: attempt.score,
+      passed: attempt.passed,
+      grade: calculateGrade(attempt.score),
+      attemptedAt: attempt.attemptedAt,
+    }));
   } catch (e) {
     console.log(e);
     return [];
@@ -361,11 +358,7 @@ export function renderQuizResults(
 ): any {
   try {
     const percentage = total > 0 ? score / total : 0;
-    let grade = "F";
-    if (percentage >= 0.9) grade = "A";
-    else if (percentage >= 0.8) grade = "B";
-    else if (percentage >= 0.7) grade = "C";
-    else if (percentage >= 0.6) grade = "D";
+    const grade = calculateGrade(percentage);
 
     const result: any = {
       score,
