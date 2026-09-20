@@ -28,7 +28,9 @@ import {
 import { computeResult } from "~/services/quizScoringService";
 import {
   recordLessonCompletion,
+  recordQuizAttempt,
   type LessonCompletionSummary,
+  type QuizAttemptSummary,
 } from "~/services/gamificationService";
 import { LessonProgressStatus } from "~/db/schema";
 import { Button } from "~/components/ui/button";
@@ -337,7 +339,11 @@ export async function action({ params, request }: Route.ActionArgs) {
       throw data("Failed to score quiz", { status: 500 });
     }
 
-    return { quizResult: result };
+    // Safe to call on every attempt: a failure earns nothing, and a quiz
+    // already passed cannot be passed for points a second time.
+    const quizAward = recordQuizAttempt(currentUserId, quizId, result.passed);
+
+    return { quizResult: result, quizAward };
   }
 
   throw data("Invalid action", { status: 400 });
@@ -453,6 +459,35 @@ export default function LessonViewer({ loaderData }: Route.ComponentProps) {
 
   const quizResult = quizFetcher.data?.quizResult ?? null;
   const isSubmittingQuiz = quizFetcher.state !== "idle";
+
+  const quizAward: QuizAttemptSummary | null =
+    quizFetcher.data?.quizAward ?? null;
+
+  // The same acknowledgement a lesson completion gets, for the quiz that earned
+  // it. A failed attempt and a re-pass of a quiz already paid for both award
+  // nothing, and so say nothing.
+  useEffect(() => {
+    if (!quizAward || quizAward.pointsAwarded === 0) return;
+
+    toast.success(`+${quizAward.pointsAwarded} points`, {
+      description: `${quizAward.totalPoints.toLocaleString()} points in total`,
+      icon: <Sparkles className="size-4" />,
+    });
+
+    if (quizAward.leveledUp) {
+      toast(`Level ${quizAward.level.level} reached!`, {
+        description:
+          quizAward.level.pointsToNextLevel === null
+            ? "Highest level reached — nothing left to climb."
+            : `${quizAward.level.pointsToNextLevel.toLocaleString()} ${
+                quizAward.level.pointsToNextLevel === 1 ? "point" : "points"
+              } to level ${quizAward.level.level + 1}.`,
+        icon: <Trophy className="size-5 text-amber-500" />,
+        duration: 8000,
+        className: "border-amber-500/60 bg-amber-50 dark:bg-amber-950",
+      });
+    }
+  }, [quizAward]);
 
   if (pppBlocked) {
     const purchaseCountryName = pppPurchaseCountry
@@ -588,6 +623,7 @@ export default function LessonViewer({ loaderData }: Route.ComponentProps) {
               quiz={quiz}
               bestAttempt={bestAttempt}
               quizResult={quizResult}
+              quizAward={quizAward}
               quizFetcher={quizFetcher}
               isSubmitting={isSubmittingQuiz}
             />
@@ -816,6 +852,7 @@ function QuizSection({
   quiz,
   bestAttempt,
   quizResult,
+  quizAward,
   quizFetcher,
   isSubmitting,
 }: {
@@ -846,6 +883,7 @@ function QuizSection({
       correctOptionId: number | null;
     }>;
   } | null;
+  quizAward: QuizAttemptSummary | null;
   quizFetcher: ReturnType<typeof useFetcher>;
   isSubmitting: boolean;
 }) {
@@ -904,6 +942,14 @@ function QuizSection({
                   {Math.round(quizResult.score * 100)}%) — Grade:{" "}
                   {quizResult.grade}
                 </p>
+                {/* Only the attempt that earned them says so: a re-pass of a
+                    quiz already paid for awards nothing. */}
+                {quizAward && quizAward.pointsAwarded > 0 && (
+                  <p className="mt-1 flex items-center gap-1.5 text-sm font-medium text-green-700 dark:text-green-400">
+                    <Sparkles className="size-4" />+{quizAward.pointsAwarded}{" "}
+                    points earned
+                  </p>
+                )}
               </div>
             </div>
           </div>

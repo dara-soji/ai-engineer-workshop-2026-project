@@ -14,6 +14,22 @@ export function pointsForLessonCompletion(): number {
   return POINTS_PER_LESSON_COMPLETION;
 }
 
+/**
+ * Points earned the first time a student passes a quiz. Worth more than the
+ * lesson it belongs to: reading a lesson is showing up, passing its quiz is
+ * demonstrating you learned something.
+ */
+export const POINTS_PER_QUIZ_PASS = 25;
+
+/**
+ * The points passing a quiz is worth. Paid once per quiz, however many attempts
+ * it took and however much a later attempt improves the score — the ledger's
+ * key, not this number, is what enforces that.
+ */
+export function pointsForQuizPass(): number {
+  return POINTS_PER_QUIZ_PASS;
+}
+
 /** A run of consecutive days worth a bonus, and what that bonus is. */
 export type StreakMilestone = {
   /** The length of run, in consecutive days, that reaches this milestone. */

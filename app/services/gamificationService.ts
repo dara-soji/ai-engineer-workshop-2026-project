@@ -1,6 +1,7 @@
 import { PointsReason, PointsSourceType } from "~/db/schema";
 import {
   pointsForLessonCompletion,
+  pointsForQuizPass,
   streakMilestoneFor,
   type StreakMilestone,
 } from "~/lib/pointsRules";
@@ -106,6 +107,62 @@ function awardStreakMilestone(userId: number): StreakMilestone | null {
 
   // Already paid for — nothing new happened, so there is nothing to celebrate.
   return award.awarded ? milestone : null;
+}
+
+export type QuizAttemptSummary = {
+  /** What this attempt earned. Zero for a failure, and for a re-pass. */
+  pointsAwarded: number;
+  /** The student's total after this attempt. */
+  totalPoints: number;
+  /** The level that total puts them on, and how far the next one is. */
+  level: LevelProgress;
+  /** True only when this attempt's points carried them over a threshold. */
+  leveledUp: boolean;
+};
+
+/**
+ * Records a quiz attempt, awarding the quiz's points if it was a passing one,
+ * and reports back what was earned so the UI can acknowledge it alongside the
+ * result.
+ *
+ * Safe to call on every attempt, passing or not. A failure awards nothing; a
+ * pass awards once per quiz, however many attempts it took and however much a
+ * later attempt improves the score. That is the ledger's key doing the work —
+ * the quiz is the source id, so there is no attempt count to consult and
+ * re-taking a passed quiz to farm points is impossible by construction.
+ *
+ * `passed` is the verdict from the quiz scoring service, which is the only
+ * module that decides what passes: the instructor's configured passing score
+ * governs, and a score exactly at it is a pass. Callers hand that verdict
+ * straight through rather than re-deriving it, so the award and the result the
+ * student is shown can never disagree.
+ */
+export function recordQuizAttempt(
+  userId: number,
+  quizId: number,
+  passed: boolean
+): QuizAttemptSummary {
+  const levelBefore = getLevelProgress(getLedgerPointsTotal(userId)).level;
+
+  const award = passed
+    ? awardPoints({
+        userId,
+        amount: pointsForQuizPass(),
+        reason: PointsReason.QuizPassed,
+        sourceType: PointsSourceType.Quiz,
+        sourceId: quizId,
+      })
+    : { awarded: false, amount: 0 };
+
+  const totalPoints = getLedgerPointsTotal(userId);
+  const level = getLevelProgress(totalPoints);
+
+  return {
+    pointsAwarded: award.amount,
+    totalPoints,
+    level,
+    leveledUp: level.level > levelBefore,
+  };
 }
 
 /** Every point the student has earned, for display. */
