@@ -9,6 +9,7 @@ import {
 import { getLevelProgress, type LevelProgress } from "~/lib/levels";
 import {
   awardPoints,
+  getCoursePointsTotal as getLedgerCoursePointsTotal,
   getPointsTotal as getLedgerPointsTotal,
 } from "./pointsLedgerService";
 import {
@@ -229,6 +230,24 @@ export function recordQuizAttempt(
 /** Every point the student has earned, for display. */
 export function getPointsTotal(userId: number): number {
   return getLedgerPointsTotal(userId);
+}
+
+/**
+ * The points the student earned inside one course — its lessons, their quizzes,
+ * and the bonus for finishing it — for the dashboard's course cards, so effort
+ * is attributable to the work that produced it rather than a single global
+ * number. Zero for a course they have earned nothing in.
+ *
+ * This is a read over the events already recorded: every award names what
+ * caused it, so there are no new earning rules here and nothing stored per
+ * course. Streak milestones are attributed to no course, so the per-course
+ * totals need not add up to the global one.
+ */
+export function getCoursePointsTotal(
+  userId: number,
+  courseId: number
+): number {
+  return getLedgerCoursePointsTotal(userId, courseId);
 }
 
 export type PointsSummary = {

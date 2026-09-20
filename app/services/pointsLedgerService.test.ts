@@ -12,7 +12,11 @@ vi.mock("~/db", () => ({
 }));
 
 // Import after mock so the module picks up our test db
-import { awardPoints, getPointsTotal } from "./pointsLedgerService";
+import {
+  awardPoints,
+  getCoursePointsTotal,
+  getPointsTotal,
+} from "./pointsLedgerService";
 
 function createSecondUser() {
   return testDb
@@ -24,6 +28,54 @@ function createSecondUser() {
     })
     .returning()
     .get();
+}
+
+/** A second course, so a student's effort can be split across two. */
+function createCourse(slug: string) {
+  return testDb
+    .insert(schema.courses)
+    .values({
+      title: `Course ${slug}`,
+      slug,
+      description: "Another test course",
+      instructorId: base.instructor.id,
+      categoryId: base.category.id,
+      status: schema.CourseStatus.Published,
+    })
+    .returning()
+    .get();
+}
+
+/** A lesson in the given course, in a module of its own. */
+function createLesson(courseId: number, position: number) {
+  const mod = testDb
+    .insert(schema.modules)
+    .values({ courseId, title: `Module ${position}`, position })
+    .returning()
+    .get();
+
+  return testDb
+    .insert(schema.lessons)
+    .values({ moduleId: mod.id, title: `Lesson ${position}`, position: 1 })
+    .returning()
+    .get();
+}
+
+/** A lesson in the given course, with a quiz on it. */
+function createLessonWithQuiz(courseId: number, position: number) {
+  const lesson = createLesson(courseId, position);
+
+  const quiz = testDb
+    .insert(schema.quizzes)
+    .values({
+      lessonId: lesson.id,
+      title: `Quiz ${position}`,
+      passingScore: 0.7,
+    })
+    .returning()
+    .get();
+
+  return { lesson, quiz };
 }
 
 describe("pointsLedgerService", () => {
@@ -188,6 +240,211 @@ describe("pointsLedgerService", () => {
 
       expect(second.awarded).toBe(true);
       expect(getPointsTotal(other.id)).toBe(10);
+    });
+  });
+
+  describe("getCoursePointsTotal", () => {
+    it("is zero for a student who has earned nothing", () => {
+      expect(getCoursePointsTotal(base.user.id, base.course.id)).toBe(0);
+    });
+
+    it("is zero for a course the student has earned nothing in", () => {
+      const other = createCourse("second-course");
+      const { lesson } = createLessonWithQuiz(base.course.id, 1);
+
+      awardPoints({
+        userId: base.user.id,
+        amount: 10,
+        reason: schema.PointsReason.LessonCompleted,
+        sourceType: schema.PointsSourceType.Lesson,
+        sourceId: lesson.id,
+      });
+
+      expect(getCoursePointsTotal(base.user.id, other.id)).toBe(0);
+    });
+
+    it("is zero for a course that does not exist", () => {
+      expect(getCoursePointsTotal(base.user.id, 9999)).toBe(0);
+    });
+
+    it("counts points earned on the course's lessons", () => {
+      const first = createLessonWithQuiz(base.course.id, 1);
+      const second = createLessonWithQuiz(base.course.id, 2);
+
+      awardPoints({
+        userId: base.user.id,
+        amount: 10,
+        reason: schema.PointsReason.LessonCompleted,
+        sourceType: schema.PointsSourceType.Lesson,
+        sourceId: first.lesson.id,
+      });
+      awardPoints({
+        userId: base.user.id,
+        amount: 10,
+        reason: schema.PointsReason.LessonCompleted,
+        sourceType: schema.PointsSourceType.Lesson,
+        sourceId: second.lesson.id,
+      });
+
+      expect(getCoursePointsTotal(base.user.id, base.course.id)).toBe(20);
+    });
+
+    it("counts points earned on the course's quizzes", () => {
+      const { quiz } = createLessonWithQuiz(base.course.id, 1);
+
+      awardPoints({
+        userId: base.user.id,
+        amount: 25,
+        reason: schema.PointsReason.QuizPassed,
+        sourceType: schema.PointsSourceType.Quiz,
+        sourceId: quiz.id,
+      });
+
+      expect(getCoursePointsTotal(base.user.id, base.course.id)).toBe(25);
+    });
+
+    it("counts the bonus for finishing the course itself", () => {
+      awardPoints({
+        userId: base.user.id,
+        amount: 200,
+        reason: schema.PointsReason.CourseCompleted,
+        sourceType: schema.PointsSourceType.Course,
+        sourceId: base.course.id,
+      });
+
+      expect(getCoursePointsTotal(base.user.id, base.course.id)).toBe(200);
+    });
+
+    it("sums the lesson, quiz and course points the student earned there", () => {
+      const { lesson, quiz } = createLessonWithQuiz(base.course.id, 1);
+
+      awardPoints({
+        userId: base.user.id,
+        amount: 10,
+        reason: schema.PointsReason.LessonCompleted,
+        sourceType: schema.PointsSourceType.Lesson,
+        sourceId: lesson.id,
+      });
+      awardPoints({
+        userId: base.user.id,
+        amount: 25,
+        reason: schema.PointsReason.QuizPassed,
+        sourceType: schema.PointsSourceType.Quiz,
+        sourceId: quiz.id,
+      });
+      awardPoints({
+        userId: base.user.id,
+        amount: 200,
+        reason: schema.PointsReason.CourseCompleted,
+        sourceType: schema.PointsSourceType.Course,
+        sourceId: base.course.id,
+      });
+
+      expect(getCoursePointsTotal(base.user.id, base.course.id)).toBe(235);
+    });
+
+    it("does not leak points earned in another course", () => {
+      const other = createCourse("second-course");
+      const mine = createLessonWithQuiz(base.course.id, 1);
+      const theirs = createLessonWithQuiz(other.id, 2);
+
+      awardPoints({
+        userId: base.user.id,
+        amount: 10,
+        reason: schema.PointsReason.LessonCompleted,
+        sourceType: schema.PointsSourceType.Lesson,
+        sourceId: mine.lesson.id,
+      });
+      awardPoints({
+        userId: base.user.id,
+        amount: 10,
+        reason: schema.PointsReason.LessonCompleted,
+        sourceType: schema.PointsSourceType.Lesson,
+        sourceId: theirs.lesson.id,
+      });
+      awardPoints({
+        userId: base.user.id,
+        amount: 25,
+        reason: schema.PointsReason.QuizPassed,
+        sourceType: schema.PointsSourceType.Quiz,
+        sourceId: theirs.quiz.id,
+      });
+      awardPoints({
+        userId: base.user.id,
+        amount: 200,
+        reason: schema.PointsReason.CourseCompleted,
+        sourceType: schema.PointsSourceType.Course,
+        sourceId: other.id,
+      });
+
+      expect(getCoursePointsTotal(base.user.id, base.course.id)).toBe(10);
+      expect(getCoursePointsTotal(base.user.id, other.id)).toBe(235);
+    });
+
+    it("does not mistake another course's quiz for a lesson of its own", () => {
+      // Lesson ids and quiz ids are counted separately, so the same number can
+      // be both. Here this course's lesson shares an id with the other
+      // course's quiz: a total that matched on the id alone would claim it.
+      const other = createCourse("second-course");
+      const myLesson = createLesson(base.course.id, 1);
+      const theirs = createLessonWithQuiz(other.id, 2);
+
+      awardPoints({
+        userId: base.user.id,
+        amount: 25,
+        reason: schema.PointsReason.QuizPassed,
+        sourceType: schema.PointsSourceType.Quiz,
+        sourceId: theirs.quiz.id,
+      });
+
+      expect(theirs.quiz.id).toBe(myLesson.id);
+      expect(getCoursePointsTotal(base.user.id, base.course.id)).toBe(0);
+      expect(getCoursePointsTotal(base.user.id, other.id)).toBe(25);
+    });
+
+    it("leaves streak milestones out — a streak belongs to no one course", () => {
+      const { lesson } = createLessonWithQuiz(base.course.id, 1);
+
+      awardPoints({
+        userId: base.user.id,
+        amount: 10,
+        reason: schema.PointsReason.LessonCompleted,
+        sourceType: schema.PointsSourceType.Lesson,
+        sourceId: lesson.id,
+      });
+      awardPoints({
+        userId: base.user.id,
+        amount: 50,
+        reason: schema.PointsReason.StreakMilestoneReached,
+        sourceType: schema.PointsSourceType.Streak,
+        sourceId: 7,
+      });
+
+      expect(getCoursePointsTotal(base.user.id, base.course.id)).toBe(10);
+      expect(getPointsTotal(base.user.id)).toBe(60);
+    });
+
+    it("counts only the given student's events", () => {
+      const other = createSecondUser();
+      const { lesson } = createLessonWithQuiz(base.course.id, 1);
+
+      awardPoints({
+        userId: base.user.id,
+        amount: 10,
+        reason: schema.PointsReason.LessonCompleted,
+        sourceType: schema.PointsSourceType.Lesson,
+        sourceId: lesson.id,
+      });
+      awardPoints({
+        userId: other.id,
+        amount: 10,
+        reason: schema.PointsReason.LessonCompleted,
+        sourceType: schema.PointsSourceType.Lesson,
+        sourceId: lesson.id,
+      });
+
+      expect(getCoursePointsTotal(base.user.id, base.course.id)).toBe(10);
+      expect(getCoursePointsTotal(other.id, base.course.id)).toBe(10);
     });
   });
 });
