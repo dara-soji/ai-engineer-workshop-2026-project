@@ -2,11 +2,12 @@ import { Link } from "react-router";
 import type { Route } from "./+types/dashboard";
 import { getUserEnrolledCourses } from "~/services/enrollmentService";
 import { calculateProgress, getCompletedLessonCount, getTotalLessonCount, getNextIncompleteLesson } from "~/services/progressService";
+import { getPointsTotal } from "~/services/gamificationService";
 import { getCurrentUserId } from "~/lib/session";
 import { Card, CardContent, CardFooter, CardHeader } from "~/components/ui/card";
 import { Button } from "~/components/ui/button";
 import { Skeleton } from "~/components/ui/skeleton";
-import { AlertTriangle, BookOpen, CheckCircle2, GraduationCap, PlayCircle } from "lucide-react";
+import { AlertTriangle, BookOpen, CheckCircle2, GraduationCap, PlayCircle, Sparkles } from "lucide-react";
 import { CourseImage } from "~/components/course-image";
 import { data, isRouteErrorResponse } from "react-router";
 
@@ -59,7 +60,9 @@ export async function loader({ request }: Route.LoaderArgs) {
   const completedCourses = coursesWithProgress.filter((c) => c.isCompleted);
   const inProgressCourses = coursesWithProgress.filter((c) => !c.isCompleted);
 
-  return { inProgressCourses, completedCourses };
+  const totalPoints = getPointsTotal(currentUserId);
+
+  return { inProgressCourses, completedCourses, totalPoints };
 }
 
 function DashboardCardSkeleton() {
@@ -102,7 +105,7 @@ export function HydrateFallback() {
 }
 
 export default function Dashboard({ loaderData }: Route.ComponentProps) {
-  const { inProgressCourses, completedCourses } = loaderData;
+  const { inProgressCourses, completedCourses, totalPoints } = loaderData;
   const totalCourses = inProgressCourses.length + completedCourses.length;
 
   return (
@@ -116,11 +119,26 @@ export default function Dashboard({ loaderData }: Route.ComponentProps) {
         <span className="text-foreground">Dashboard</span>
       </nav>
 
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold">My Dashboard</h1>
-        <p className="mt-1 text-muted-foreground">
-          Track your learning progress
-        </p>
+      <div className="mb-8 flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 className="text-3xl font-bold">My Dashboard</h1>
+          <p className="mt-1 text-muted-foreground">
+            Track your learning progress
+          </p>
+        </div>
+        <Card className="min-w-40">
+          <CardContent className="flex items-center gap-3 px-6">
+            <Sparkles className="size-6 text-primary" />
+            <div>
+              <div className="text-2xl font-bold leading-none">
+                {totalPoints.toLocaleString()}
+              </div>
+              <div className="mt-1 text-sm text-muted-foreground">
+                {totalPoints === 1 ? "point" : "points"}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
       </div>
 
       {totalCourses === 0 ? (
